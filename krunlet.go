@@ -23,9 +23,9 @@ import (
 // Options are runner-wide defaults. A trusted, prepared Linux rootfs directory
 // is required; krunlet does not download unverified container images.
 type Options struct {
-	RootFS         string
-	HelperPath     string
-	LibraryPath    string
+	RootFS      string
+	HelperPath  string
+	LibraryPath string
 	// Kernel selects a host-side kernel image. Nil uses the bundled libkrunfw
 	// kernel. Custom kernel paths are trusted host inputs, not guest paths.
 	Kernel         *KernelConfig
