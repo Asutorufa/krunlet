@@ -93,7 +93,9 @@ func cleanupStaleRoots(base string, olderThan time.Duration) error {
 	}
 	cutoff := time.Now().Add(-olderThan)
 	for _, entry := range entries {
-		if !entry.IsDir() { continue }
+		if !entry.IsDir() {
+			continue
+		}
 		name := entry.Name()
 		if !strings.HasPrefix(name, "krunlet-root-") &&
 			!strings.HasPrefix(name, "krunlet-session-") &&
