@@ -1,0 +1,12 @@
+version: "2"
+
+# The preexisting codebase has many intentionally ignored Close/Remove errors
+# in cleanup paths and tests. Enable actionable analysis by default without
+# broad errcheck churn; error handling is tightened in reviewed changes.
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused

@@ -103,7 +103,7 @@ func New(opts Options) (*Runner, error) {
 		return nil, errors.New("RootFS is required")
 	}
 	if !filepath.IsAbs(opts.RootFS) {
-		return nil, errors.New("RootFS must be an absolute host path")
+		return nil, errors.New("rootfs must be an absolute host path")
 	}
 	root, err := filepath.Abs(opts.RootFS)
 	if err != nil {
