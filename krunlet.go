@@ -82,7 +82,7 @@ type Request struct {
 
 type Result struct {
 	ExitCode      int               `json:"exit_code"`
-	RunID string `json:"run_id,omitempty"`
+	RunID         string            `json:"run_id,omitempty"`
 	Stdout        string            `json:"stdout"`
 	Stderr        string            `json:"stderr"`
 	Duration      time.Duration     `json:"duration"`
@@ -239,11 +239,11 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	runID := newRunID()
 	result = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
 	var helperState *os.ProcessState
-	defer func(){
-		if cb:=r.cfg.OnStats;cb!=nil{
-			cb(Stats{RunID:runID,ReadyMillis:-1,DurationMillis:time.Since(start).Milliseconds(),
-				ExitCode:result.ExitCode,PeakMemoryMiB:helperPeakMemory(helperState),
-				NetworkPolicy:r.cfg.NetworkPolicy!=nil,TimedOut:result.TimedOut})
+	defer func() {
+		if cb := r.cfg.OnStats; cb != nil {
+			cb(Stats{RunID: runID, ReadyMillis: -1, DurationMillis: time.Since(start).Milliseconds(),
+				ExitCode: result.ExitCode, PeakMemoryMiB: helperPeakMemory(helperState),
+				NetworkPolicy: r.cfg.NetworkPolicy != nil, TimedOut: result.TimedOut})
 		}
 	}()
 	slog.Debug("krunlet run admitted", "run_id", runID)
@@ -387,7 +387,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	waitErr := cmd.Wait()
 	// Reap descendant processes even if the helper exited successfully.
 	supervisor.finish()
-	helperState=cmd.ProcessState
+	helperState = cmd.ProcessState
 	result.Duration = time.Since(start)
 	result.Stdout = out.String()
 	result.Stderr = errout.String()

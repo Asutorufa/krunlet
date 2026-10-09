@@ -258,42 +258,54 @@ func Available(lib string) error {
 
 // NativeInspection reports ABI feature presence without starting a VM.
 type NativeInspection struct {
-	Library string
+	Library          string
 	PkgConfigVersion string
-	Symbols map[string]bool
-	TSI bool
-	VirtioNET bool
+	Symbols          map[string]bool
+	TSI              bool
+	VirtioNET        bool
 	FirmwareLoadable bool
 }
 
 // InspectNative checks the actual loaded libkrun ABI (unlike a header
 // version or command-line package version). Version from pkg-config is only
 // informational and may refer to a different library installation.
-func InspectNative(lib string) (NativeInspection,error) {
-	if lib=="" {
-		if runtime.GOOS=="darwin" {lib="libkrun.dylib"} else {lib="libkrun.so.1"}
+func InspectNative(lib string) (NativeInspection, error) {
+	if lib == "" {
+		if runtime.GOOS == "darwin" {
+			lib = "libkrun.dylib"
+		} else {
+			lib = "libkrun.so.1"
+		}
 	}
-	report:=NativeInspection{Library:lib,Symbols:make(map[string]bool)}
-	handle,err:=purego.Dlopen(lib,purego.RTLD_NOW|purego.RTLD_LOCAL)
-	if err!=nil {return report,fmt.Errorf("open native libkrun %q: %w",lib,err)}
+	report := NativeInspection{Library: lib, Symbols: make(map[string]bool)}
+	handle, err := purego.Dlopen(lib, purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return report, fmt.Errorf("open native libkrun %q: %w", lib, err)
+	}
 	defer purego.Dlclose(handle)
-	names:=[]string{
-		"krun_create_ctx","krun_free_ctx","krun_set_vm_config",
-		"krun_set_root","krun_set_workdir","krun_set_exec",
-		"krun_set_rlimits","krun_add_vsock","krun_disable_implicit_vsock",
-		"krun_set_port_map","krun_start_enter","krun_add_net_unixstream",
+	names := []string{
+		"krun_create_ctx", "krun_free_ctx", "krun_set_vm_config",
+		"krun_set_root", "krun_set_workdir", "krun_set_exec",
+		"krun_set_rlimits", "krun_add_vsock", "krun_disable_implicit_vsock",
+		"krun_set_port_map", "krun_start_enter", "krun_add_net_unixstream",
 	}
-	for _,name:=range names{
-		_,e:=purego.Dlsym(handle,name)
-		report.Symbols[name]=e==nil
+	for _, name := range names {
+		_, e := purego.Dlsym(handle, name)
+		report.Symbols[name] = e == nil
 	}
-	report.TSI=report.Symbols["krun_add_vsock"]&&report.Symbols["krun_disable_implicit_vsock"]
-	report.VirtioNET=report.Symbols["krun_add_net_unixstream"]
-	cmd:=exec.Command("pkg-config","--modversion","libkrun")
-	if out,e:=cmd.Output();e==nil {report.PkgConfigVersion=strings.TrimSpace(string(out))}
-	for _,fw:=range []string{"libkrunfw.so.1","libkrunfw.so","libkrunfw.dylib"}{
-		id,e:=purego.Dlopen(fw,purego.RTLD_NOW|purego.RTLD_LOCAL)
-		if e==nil {report.FirmwareLoadable=true;_ = purego.Dlclose(id);break}
+	report.TSI = report.Symbols["krun_add_vsock"] && report.Symbols["krun_disable_implicit_vsock"]
+	report.VirtioNET = report.Symbols["krun_add_net_unixstream"]
+	cmd := exec.Command("pkg-config", "--modversion", "libkrun")
+	if out, e := cmd.Output(); e == nil {
+		report.PkgConfigVersion = strings.TrimSpace(string(out))
 	}
-	return report,nil
+	for _, fw := range []string{"libkrunfw.so.1", "libkrunfw.so", "libkrunfw.dylib"} {
+		id, e := purego.Dlopen(fw, purego.RTLD_NOW|purego.RTLD_LOCAL)
+		if e == nil {
+			report.FirmwareLoadable = true
+			_ = purego.Dlclose(id)
+			break
+		}
+	}
+	return report, nil
 }

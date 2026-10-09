@@ -29,11 +29,14 @@ func Enter(Config) error     { return ErrUnsupported }
 func Available(string) error { return ErrUnsupported }
 
 type NativeInspection struct {
-	Library string
+	Library          string
 	PkgConfigVersion string
-	Symbols map[string]bool
-	TSI bool
-	VirtioNET bool
+	Symbols          map[string]bool
+	TSI              bool
+	VirtioNET        bool
 	FirmwareLoadable bool
 }
-func InspectNative(lib string)(NativeInspection,error){return NativeInspection{Library:lib},ErrUnsupported}
+
+func InspectNative(lib string) (NativeInspection, error) {
+	return NativeInspection{Library: lib}, ErrUnsupported
+}
