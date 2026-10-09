@@ -17,6 +17,10 @@ func TestCustomKernelPassedToPersistentVM(t *testing.T) {
 	if err := os.WriteFile(kernel, []byte("test-image"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	realKernel, err := filepath.EvalSymlinks(kernel)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfgPath := filepath.Join(t.TempDir(), "vm-config.json")
 	original := fakeLiveHelper(t, false)
 	body, err := os.ReadFile(original)
@@ -51,7 +55,7 @@ func TestCustomKernelPassedToPersistentVM(t *testing.T) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Kernel == nil || payload.Kernel.Path != kernel || payload.Kernel.Format != 1 || payload.Kernel.Cmdline != "console=hvc0" {
+	if payload.Kernel == nil || payload.Kernel.Path != realKernel || payload.Kernel.Format != 1 || payload.Kernel.Cmdline != "console=hvc0" {
 		t.Fatalf("missing VM kernel config: %s", data)
 	}
 }
