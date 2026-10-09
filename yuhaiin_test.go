@@ -57,7 +57,6 @@ func TestYuhaiinFlowProtocol(t *testing.T) {
 				}
 			}()
 			src := net.ParseIP(tt.source)
-			dest := net.ParseIP(tt.target)
 			source := tcpip.AddrFromSlice(src.To4())
 			target := netip.MustParseAddr(tt.target)
 			if target.Is6() {
