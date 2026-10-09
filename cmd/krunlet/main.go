@@ -89,6 +89,7 @@ func run() int {
 		kernelCmdline := f.String("kernel-cmdline", "", "optional Linux kernel command line (requires --kernel)")
 		net := f.Bool("network", false, "allow guest outbound network via TSI")
 		netMode := f.String("net-mode", "", "restricted egress: allowlist or blocklist (requires --network)")
+		yuhaiin := f.String("yuhaiin-socket", "", "delegate guest networking to local yuhaiin krunlet inbound Unix socket")
 		blockPrivate := f.Bool("block-private", false, "reject private/local IP destinations in restricted mode")
 		persistent := f.Bool("persistent", false, "allow changes to original rootfs (unsafe)")
 		jsonOut := f.Bool("json", false, "print structured result JSON")
@@ -217,7 +218,11 @@ func run() int {
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
-			Kernel: customKernel, NetworkPolicy: networkPolicy})
+			Kernel: customKernel, NetworkPolicy: networkPolicy,
+			Yuhaiin: func() *krunlet.YuhaiinConfig {
+				if *yuhaiin == "" { return nil }
+				return &krunlet.YuhaiinConfig{Socket: *yuhaiin}
+			}()})
 		if e != nil {
 			fmt.Fprintln(os.Stderr, e)
 			return 125

@@ -58,14 +58,16 @@ func (l *networkLease) Close() {
 	}
 }
 
-func prepareNetwork(ctx context.Context, policy *NetworkPolicy) (*networkLease, error) {
+func prepareNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*YuhaiinConfig) (*networkLease, error) {
 	if policy == nil {
 		return &networkLease{}, nil
 	}
 	if _, err := compileNetworkPolicy(policy); err != nil {
 		return nil, err
 	}
-	gw, err := newGuestNetwork(ctx, policy)
+	var yuhaiin *YuhaiinConfig
+	if len(upstream) != 0 { yuhaiin = upstream[0] }
+	gw, err := newGuestNetwork(ctx, policy, yuhaiin)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +132,7 @@ type guestNetwork struct {
 	stack      *stack.Stack
 	ctx        context.Context
 	cancel     context.CancelFunc
+	yuhaiin    *YuhaiinConfig
 }
 
 // Accept uses the QEMU network framing expected by libkrun's Unixstream
@@ -308,7 +311,7 @@ func (g *guestNetwork) Close() {
 	g.stack.Wait()
 }
 
-func newGuestNetwork(ctx context.Context, policy *NetworkPolicy) (*guestNetwork, error) {
+func newGuestNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*YuhaiinConfig) (*guestNetwork, error) {
 	config := &types.Configuration{
 		MTU:               gatewayMTU,
 		Subnet:            gatewaySubnet,
@@ -383,6 +386,7 @@ func newGuestNetwork(ctx context.Context, policy *NetworkPolicy) (*guestNetwork,
 	}
 	child, cancel := context.WithCancel(ctx)
 	g := &guestNetwork{wire: wire, link: link, dhcpServer: server, stack: s, ctx: child, cancel: cancel}
+	if len(upstream) != 0 { g.yuhaiin = upstream[0] }
 	g.registerForwarders(policy)
 	go func() { _ = server.Serve() }()
 	return g, nil
@@ -404,7 +408,7 @@ func (g *guestNetwork) registerForwarders(policy *NetworkPolicy) {
 			req.Complete(true)
 			return
 		}
-		go g.handleTCP(req, ip, req.ID().LocalPort)
+		go g.handleTCP(req, ip, req.ID().LocalPort, req.ID().RemoteAddress, req.ID().RemotePort)
 	})
 	g.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 	udpFwd := udp.NewForwarder(g.stack, func(req *udp.ForwarderRequest) {
@@ -412,7 +416,7 @@ func (g *guestNetwork) registerForwarders(policy *NetworkPolicy) {
 		if !ok {
 			return
 		}
-		g.handleUDP(req, ip, req.ID().LocalPort)
+		g.handleUDP(req, ip, req.ID().LocalPort, req.ID().RemoteAddress, req.ID().RemotePort)
 	})
 	g.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 }
@@ -426,10 +430,16 @@ func destinationNetwork(protocol string, ip netip.Addr) string {
 	return protocol + "4"
 }
 
-func (g *guestNetwork) handleTCP(req *tcp.ForwarderRequest, ip netip.Addr, port uint16) {
+func (g *guestNetwork) handleTCP(req *tcp.ForwarderRequest, ip netip.Addr, port uint16, source tcpip.Address, sourcePort uint16) {
 	ctx, cancel := context.WithTimeout(g.ctx, 10*time.Second)
 	defer cancel()
-	outbound, err := (&net.Dialer{}).DialContext(ctx, destinationNetwork("tcp", ip), net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+	var outbound net.Conn
+	var err error
+	if g.yuhaiin != nil {
+		outbound, err = dialYuhaiin(ctx, g.yuhaiin, 1, source, sourcePort, ip, port)
+	} else {
+		outbound, err = (&net.Dialer{}).DialContext(ctx, destinationNetwork("tcp", ip), net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+	}
 	if err != nil {
 		req.Complete(true)
 		return
@@ -456,7 +466,7 @@ func (g *guestNetwork) handleTCP(req *tcp.ForwarderRequest, ip netip.Addr, port 
 	}()
 }
 
-func (g *guestNetwork) handleUDP(req *udp.ForwarderRequest, ip netip.Addr, port uint16) {
+func (g *guestNetwork) handleUDP(req *udp.ForwarderRequest, ip netip.Addr, port uint16, source tcpip.Address, sourcePort uint16) {
 	var wq waiter.Queue
 	endpoint, err := req.CreateEndpoint(&wq)
 	if err != nil {
@@ -465,7 +475,14 @@ func (g *guestNetwork) handleUDP(req *udp.ForwarderRequest, ip netip.Addr, port 
 	guest := gonet.NewUDPConn(&wq, endpoint)
 	go func() {
 		defer guest.Close()
-		outbound, err := (&net.Dialer{}).DialContext(g.ctx, destinationNetwork("udp", ip), net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+		var outbound net.Conn
+		var err error
+		if g.yuhaiin != nil {
+			outbound, err = dialYuhaiin(g.ctx, g.yuhaiin, 2, source, sourcePort, ip, port)
+			if err == nil { outbound = &yuhaiinPacketConn{Conn: outbound} }
+		} else {
+			outbound, err = (&net.Dialer{}).DialContext(g.ctx, destinationNetwork("udp", ip), net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+		}
 		if err != nil {
 			return
 		}

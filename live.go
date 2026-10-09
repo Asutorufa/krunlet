@@ -105,7 +105,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		}
 	}()
 	cfg := sess.runner.cfg
-	lease, err := prepareNetwork(ctx, cfg.NetworkPolicy)
+	lease, err := prepareNetwork(ctx, cfg.NetworkPolicy, cfg.Yuhaiin)
 	if err != nil {
 		return nil, fmt.Errorf("gVisor network setup: %w", err)
 	}
