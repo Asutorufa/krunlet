@@ -20,14 +20,14 @@ func (r *Runner) acquire(ctx context.Context) error {
 	if err := ctx.Err(); err != nil { return err }
 	if r.cfg.FailFast {
 		select {
-		case r.permits <- struct{}{}{}:
+		case r.permits <- struct{}{}:
 			return nil
 		default:
 			return ErrTooManyVMs
 		}
 	}
 	select {
-	case r.permits <- struct{}{}{}:
+	case r.permits <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
