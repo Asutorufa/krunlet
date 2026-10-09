@@ -59,6 +59,7 @@ func (s *Session) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	return s.runner.Run(ctx, req)
 }
+
 // RunIO streams a one-shot VM execution with a serialized reusable rootfs.
 func (s *Session) RunIO(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Result, error) {
 	s.mu.Lock()
