@@ -25,6 +25,7 @@ type Config struct {
 	Ports     []string
 	RLimits   []string
 	Library   string
+	ErrorPath string
 }
 
 type api struct {
