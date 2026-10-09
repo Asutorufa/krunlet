@@ -207,7 +207,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	payload := krunffi.Config{RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
+	// Only the helper writes to this private status file. It distinguishes
+	// VMM startup failures from a guest process legitimately exiting 125.
+	status, err := os.CreateTemp("", "krunlet-status-*.txt")
+	if err != nil {
+		return result, err
+	}
+	defer os.Remove(status.Name())
+	if err = status.Close(); err != nil {
+		return result, err
+	}
+	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
 		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath}
 	configFile, err := os.CreateTemp("", "krunlet-config-*.json")
@@ -258,6 +268,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	if result.OutputLimited {
 		return result, errors.New("guest output limit exceeded")
+	}
+	if statusErr, readErr := os.ReadFile(status.Name()); readErr == nil && len(statusErr) > 0 {
+		return result, fmt.Errorf("libkrun helper failed: %s", strings.TrimSpace(string(statusErr)))
 	}
 	if result.TimedOut {
 		return result, context.DeadlineExceeded
