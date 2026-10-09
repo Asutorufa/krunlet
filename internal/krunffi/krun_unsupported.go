@@ -27,3 +27,13 @@ var ErrUnsupported = errors.New("libkrun is only supported on linux/amd64, linux
 
 func Enter(Config) error     { return ErrUnsupported }
 func Available(string) error { return ErrUnsupported }
+
+type NativeInspection struct {
+	Library string
+	PkgConfigVersion string
+	Symbols map[string]bool
+	TSI bool
+	VirtioNET bool
+	FirmwareLoadable bool
+}
+func InspectNative(lib string)(NativeInspection,error){return NativeInspection{Library:lib},ErrUnsupported}

@@ -2,6 +2,7 @@ name: Go
 on:
   push:
   pull_request:
+  workflow_dispatch:
 jobs:
   test:
     strategy:
@@ -29,3 +30,54 @@ jobs:
         run: CGO_ENABLED=0 go test ./...
       - name: Vet
         run: go vet ./...
+
+      - name: Race detector (Linux)
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=1 go test -race ./...
+
+      - name: Native doctor (informational on hosted runners)
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "/dev/kvm detected; run doctor --rootfs on a KVM self-hosted runner with libkrun 1.19.x"
+          else
+            echo "No /dev/kvm: hosted runner cannot execute native microVM integration tests"
+          fi
+
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=5m
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  vm-integration:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, kvm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Require native virtualization and a trusted test rootfs
+        run: |
+          test -r /dev/kvm
+          test -d "${KRUNLET_TEST_ROOTFS:?set KRUNLET_TEST_ROOTFS on the self-hosted runner}"
+      - name: Real VM doctor
+        run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
+      - name: Real VM integration tests
+        run: CGO_ENABLED=0 go test -tags vm_integration ./...

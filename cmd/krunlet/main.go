@@ -63,14 +63,16 @@ func run() int {
 	case "doctor":
 		f := flag.NewFlagSet("doctor", flag.ContinueOnError)
 		lib := f.String("lib", "", "libkrun shared library path")
+		rootfs := f.String("rootfs", "", "trusted rootfs for a real /bin/true VM smoke test (optional)")
 		if f.Parse(os.Args[2:]) != nil {
 			return 2
 		}
-		if e := krunlet.Doctor(*lib); e != nil {
+		report, e := krunlet.DoctorDetailed(context.Background(), *lib, *rootfs)
+		_ = json.NewEncoder(os.Stdout).Encode(report)
+		if e != nil {
 			fmt.Fprintln(os.Stderr, "not ready:", e)
 			return 1
 		}
-		fmt.Println("libkrun ABI symbols found; run a VM to verify virtualization permissions")
 		return 0
 	case "version":
 		fmt.Println("krunlet", version)
