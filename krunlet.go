@@ -248,7 +248,9 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	lease, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy)
-	if err != nil { return result, fmt.Errorf("gVisor network setup: %w", err) }
+	if err != nil {
+		return result, fmt.Errorf("gVisor network setup: %w", err)
+	}
 	defer lease.Close()
 	// Only the helper writes to this private status file. It distinguishes
 	// VMM startup failures from a guest process legitimately exiting 125.

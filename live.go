@@ -106,8 +106,14 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}()
 	cfg := sess.runner.cfg
 	lease, err := prepareNetwork(ctx, cfg.NetworkPolicy)
-	if err != nil { return nil, fmt.Errorf("gVisor network setup: %w", err) }
-	defer func() { if err != nil { lease.Close() } }()
+	if err != nil {
+		return nil, fmt.Errorf("gVisor network setup: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			lease.Close()
+		}
+	}()
 	payload := krunffi.Config{RootFS: sess.root, WorkDir: "/", Command: []string{"/bin/sh", "-c", liveDriver},
 		Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LANG=C.UTF-8"},
 		CPUs: cfg.CPUs, MemoryMiB: cfg.MemoryMiB, Network: cfg.Network, Ports: cfg.PortMaps, RLimits: cfg.RLimits,

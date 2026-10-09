@@ -75,7 +75,6 @@ func TestNetworkPolicyValidation(t *testing.T) {
 	for _, mutate := range []func(*NetworkPolicy){
 		func(p *NetworkPolicy) { p.Mode = "anything" },
 
-
 		func(p *NetworkPolicy) { p.Allow = []NetworkRule{{CIDR: "not-a-domain.example"}} },
 		func(p *NetworkPolicy) { p.Allow = []NetworkRule{{CIDR: "::ffff:127.0.0.1/128"}} },
 		func(p *NetworkPolicy) { p.Allow = []NetworkRule{{CIDR: "1.2.3.4", Protocol: "quic"}} },
@@ -107,7 +106,7 @@ func TestNetworkPolicyValidation(t *testing.T) {
 
 func TestNetworkPolicyRequiresExplicitNetworking(t *testing.T) {
 	root := t.TempDir()
-	_, err := New(Options{RootFS: root, NetworkPolicy: &NetworkPolicy{Mode: NetworkAllowlist, }})
+	_, err := New(Options{RootFS: root, NetworkPolicy: &NetworkPolicy{Mode: NetworkAllowlist}})
 	if err == nil || !strings.Contains(err.Error(), "Network=true") {
 		t.Fatalf("got %v", err)
 	}
