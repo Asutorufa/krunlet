@@ -197,12 +197,18 @@ func run() int {
 			}
 			for _, spec := range allowCIDRs {
 				rule, e := parseNetworkRule(spec)
-				if e != nil { fmt.Fprintln(os.Stderr, "--allow-cidr:", e); return 2 }
+				if e != nil {
+					fmt.Fprintln(os.Stderr, "--allow-cidr:", e)
+					return 2
+				}
 				networkPolicy.Allow = append(networkPolicy.Allow, rule)
 			}
 			for _, spec := range blockCIDRs {
 				rule, e := parseNetworkRule(spec)
-				if e != nil { fmt.Fprintln(os.Stderr, "--block-cidr:", e); return 2 }
+				if e != nil {
+					fmt.Fprintln(os.Stderr, "--block-cidr:", e)
+					return 2
+				}
 				networkPolicy.Block = append(networkPolicy.Block, rule)
 			}
 		} else if *netNamespace != "" || *blockPrivate || len(allowCIDRs) > 0 || len(blockCIDRs) > 0 {

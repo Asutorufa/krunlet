@@ -22,19 +22,19 @@ type KernelConfig struct {
 }
 
 type Config struct {
-	Kernel    *KernelConfig
-	RootFS    string
-	WorkDir   string
-	Command   []string
-	Env       []string
-	CPUs      uint8
-	MemoryMiB uint32
-	Network   bool
+	Kernel            *KernelConfig
+	RootFS            string
+	WorkDir           string
+	Command           []string
+	Env               []string
+	CPUs              uint8
+	MemoryMiB         uint32
+	Network           bool
 	RestrictedNetwork bool
-	Ports     []string
-	RLimits   []string
-	Library   string
-	ErrorPath string
+	Ports             []string
+	RLimits           []string
+	Library           string
+	ErrorPath         string
 }
 
 type api struct {

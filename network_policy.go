@@ -29,38 +29,44 @@ type NetworkRule struct {
 // provisioned by the administrator with the necessary routes/NAT. Never share
 // it with unrelated workloads or give the helper network-administration rights.
 type NetworkPolicy struct {
-	Mode NetworkMode
-	Allow []NetworkRule
-	Block []NetworkRule
+	Mode                 NetworkMode
+	Allow                []NetworkRule
+	Block                []NetworkRule
 	BlockPrivateNetworks bool
-	Namespace string
+	Namespace            string
 }
 
 type compiledRule struct {
-	prefix netip.Prefix
-	port uint16
+	prefix   netip.Prefix
+	port     uint16
 	protocol string
 }
 
 type compiledNetworkPolicy struct {
-	mode NetworkMode
-	allow []compiledRule
-	block []compiledRule
+	mode         NetworkMode
+	allow        []compiledRule
+	block        []compiledRule
 	blockPrivate bool
-	namespace string
+	namespace    string
 }
 
 func normalizeNetworkPolicy(p *NetworkPolicy) (*NetworkPolicy, error) {
-	if p == nil { return nil, nil }
+	if p == nil {
+		return nil, nil
+	}
 	copy := *p
 	copy.Allow = append([]NetworkRule(nil), p.Allow...)
 	copy.Block = append([]NetworkRule(nil), p.Block...)
-	if _, err := compileNetworkPolicy(&copy); err != nil { return nil, err }
+	if _, err := compileNetworkPolicy(&copy); err != nil {
+		return nil, err
+	}
 	return &copy, nil
 }
 
 func compileNetworkPolicy(p *NetworkPolicy) (*compiledNetworkPolicy, error) {
-	if p == nil { return nil, nil }
+	if p == nil {
+		return nil, nil
+	}
 	if p.Mode != NetworkAllowlist && p.Mode != NetworkBlocklist {
 		return nil, fmt.Errorf("network policy mode must be allowlist or blocklist")
 	}
@@ -80,7 +86,9 @@ func compileNetworkPolicy(p *NetworkPolicy) (*compiledNetworkPolicy, error) {
 			} else {
 				var addr netip.Addr
 				addr, err = netip.ParseAddr(r.CIDR)
-				if err == nil { prefix = netip.PrefixFrom(addr, addr.BitLen()) }
+				if err == nil {
+					prefix = netip.PrefixFrom(addr, addr.BitLen())
+				}
 			}
 			if err != nil || !prefix.IsValid() || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" {
 				return nil, fmt.Errorf("%s[%d]: invalid IP/CIDR %q", label, i, r.CIDR)
@@ -93,8 +101,12 @@ func compileNetworkPolicy(p *NetworkPolicy) (*compiledNetworkPolicy, error) {
 		return result, nil
 	}
 	var err error
-	if out.allow, err = parse("allow", p.Allow); err != nil { return nil, err }
-	if out.block, err = parse("block", p.Block); err != nil { return nil, err }
+	if out.allow, err = parse("allow", p.Allow); err != nil {
+		return nil, err
+	}
+	if out.block, err = parse("block", p.Block); err != nil {
+		return nil, err
+	}
 	if p.Mode == NetworkBlocklist && len(p.Allow) > 0 {
 		return nil, fmt.Errorf("allow rules are only valid in allowlist mode")
 	}
@@ -106,13 +118,17 @@ func compileNetworkPolicy(p *NetworkPolicy) (*compiledNetworkPolicy, error) {
 // not via this method.
 func (p *NetworkPolicy) Allows(ip netip.Addr, port uint16, protocol string) (bool, error) {
 	c, err := compileNetworkPolicy(p)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	if !ip.IsValid() || ip.Zone() != "" || port == 0 ||
 		(protocol != "tcp" && protocol != "udp") {
 		return false, fmt.Errorf("invalid destination")
 	}
 	ip = ip.Unmap()
-	if c.blockPrivate && isBlockedPrivate(ip) { return false, nil }
+	if c.blockPrivate && isBlockedPrivate(ip) {
+		return false, nil
+	}
 	match := func(rules []compiledRule) bool {
 		for _, r := range rules {
 			if r.prefix.Contains(ip) && (r.port == 0 || r.port == port) &&
@@ -122,8 +138,12 @@ func (p *NetworkPolicy) Allows(ip netip.Addr, port uint16, protocol string) (boo
 		}
 		return false
 	}
-	if match(c.block) { return false, nil }
-	if c.mode == NetworkAllowlist { return match(c.allow), nil }
+	if match(c.block) {
+		return false, nil
+	}
+	if c.mode == NetworkAllowlist {
+		return match(c.allow), nil
+	}
 	return true, nil
 }
 
@@ -146,7 +166,9 @@ var blockedPrivatePrefixes = []netip.Prefix{
 
 func isBlockedPrivate(addr netip.Addr) bool {
 	for _, p := range blockedPrivatePrefixes {
-		if p.Contains(addr) { return true }
+		if p.Contains(addr) {
+			return true
+		}
 	}
 	return false
 }

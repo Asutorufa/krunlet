@@ -14,5 +14,5 @@ func prepareNetwork(_ context.Context, p *NetworkPolicy, _ *exec.Cmd) (networkLe
 	if p != nil {
 		return nil, errors.New("restricted network policies require Linux network namespaces and nftables; unsupported on this host")
 	}
-	return func(){}, nil
+	return func() {}, nil
 }

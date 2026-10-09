@@ -20,24 +20,38 @@ import (
 type networkLease func()
 
 func prepareNetwork(ctx context.Context, p *NetworkPolicy, cmd *exec.Cmd) (networkLease, error) {
-	if p == nil { return func(){}, nil }
+	if p == nil {
+		return func() {}, nil
+	}
 	c, err := compileNetworkPolicy(p)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	name := c.namespace
 	nsPath := filepath.Join("/run/netns", name)
 	ns, err := os.Stat(nsPath)
-	if err != nil { return nil, fmt.Errorf("network namespace %q: %w", name, err) }
+	if err != nil {
+		return nil, fmt.Errorf("network namespace %q: %w", name, err)
+	}
 	host, err := os.Stat("/proc/self/ns/net")
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	if os.SameFile(ns, host) {
 		return nil, fmt.Errorf("network namespace %q is the host network namespace", name)
 	}
 	ipPath, err := exec.LookPath("ip")
-	if err != nil { return nil, fmt.Errorf("restricted networking requires iproute2: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("restricted networking requires iproute2: %w", err)
+	}
 	nftPath, err := exec.LookPath("nft")
-	if err != nil { return nil, fmt.Errorf("restricted networking requires nftables: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("restricted networking requires nftables: %w", err)
+	}
 	var random [8]byte
-	if _, err = rand.Read(random[:]); err != nil { return nil, err }
+	if _, err = rand.Read(random[:]); err != nil {
+		return nil, err
+	}
 	table := "krunlet_" + hex.EncodeToString(random[:])
 	script := nftPolicyScript(c, table)
 	setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -71,7 +85,9 @@ func nftPolicyScript(p *compiledNetworkPolicy, table string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "add table inet %s\n", table)
 	policy := "accept"
-	if p.mode == NetworkAllowlist { policy = "drop" }
+	if p.mode == NetworkAllowlist {
+		policy = "drop"
+	}
 	fmt.Fprintf(&b, "add chain inet %s output { type filter hook output priority -200; policy %s; }\n", table, policy)
 	add := func(rule string) {
 		fmt.Fprintf(&b, "add rule inet %s output %s\n", table, rule)
@@ -79,25 +95,37 @@ func nftPolicyScript(p *compiledNetworkPolicy, table string) string {
 	if p.blockPrivate {
 		for _, prefix := range blockedPrivatePrefixes {
 			family := "ip"
-			if prefix.Addr().Is6() { family = "ip6" }
+			if prefix.Addr().Is6() {
+				family = "ip6"
+			}
 			add(fmt.Sprintf("%s daddr %s drop", family, prefix))
 		}
 	}
-	for _, rule := range p.block { nftRule(rule, "drop", add) }
+	for _, rule := range p.block {
+		nftRule(rule, "drop", add)
+	}
 	if p.mode == NetworkAllowlist {
-		for _, rule := range p.allow { nftRule(rule, "accept", add) }
+		for _, rule := range p.allow {
+			nftRule(rule, "accept", add)
+		}
 	}
 	return b.String()
 }
 
 func nftRule(r compiledRule, verdict string, add func(string)) {
 	family := "ip"
-	if r.prefix.Addr().Is6() { family = "ip6" }
+	if r.prefix.Addr().Is6() {
+		family = "ip6"
+	}
 	base := family + " daddr " + r.prefix.String()
 	for _, proto := range []string{"tcp", "udp"} {
-		if r.protocol != "" && r.protocol != proto { continue }
+		if r.protocol != "" && r.protocol != proto {
+			continue
+		}
 		rule := base + " meta l4proto " + proto
-		if r.port != 0 { rule += " " + proto + " dport " + strconv.FormatUint(uint64(r.port), 10) }
+		if r.port != 0 {
+			rule += " " + proto + " dport " + strconv.FormatUint(uint64(r.port), 10)
+		}
 		add(rule + " " + verdict)
 	}
 }

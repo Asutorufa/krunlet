@@ -15,7 +15,12 @@ func TestNetworkPolicyAllowlist(t *testing.T) {
 			{CIDR: "10.0.0.0/8", Port: 443},
 		},
 	}
-	for _, tt := range []struct{ ip string; port uint16; proto string; allowed bool }{
+	for _, tt := range []struct {
+		ip      string
+		port    uint16
+		proto   string
+		allowed bool
+	}{
 		{"1.1.1.1", 443, "tcp", true},
 		{"1.1.1.1", 443, "udp", false},
 		{"1.1.1.1", 80, "tcp", false},
@@ -30,7 +35,7 @@ func TestNetworkPolicyAllowlist(t *testing.T) {
 	} {
 		allow, err := p.Allows(netip.MustParseAddr(tt.ip), tt.port, tt.proto)
 		if err != nil || allow != tt.allowed {
-			t.Errorf("%s:%d/%s allowed=%t err=%v, want %t",tt.ip,tt.port,tt.proto,allow,err,tt.allowed)
+			t.Errorf("%s:%d/%s allowed=%t err=%v, want %t", tt.ip, tt.port, tt.proto, allow, err, tt.allowed)
 		}
 	}
 }
@@ -40,52 +45,74 @@ func TestNetworkPolicyBlacklistAndPrecedence(t *testing.T) {
 		Mode: NetworkBlocklist, Namespace: "agent_2",
 		Block: []NetworkRule{{CIDR: "198.51.100.0/24", Port: 443}, {CIDR: "::1/128"}},
 	}
-	for _, tt := range []struct{ ip string; port uint16; allow bool }{
-		{"198.51.100.4",443,false},
-		{"198.51.100.4",80,true},
-		{"198.51.101.4",443,true},
-		{"::1",123,false},
+	for _, tt := range []struct {
+		ip    string
+		port  uint16
+		allow bool
+	}{
+		{"198.51.100.4", 443, false},
+		{"198.51.100.4", 80, true},
+		{"198.51.101.4", 443, true},
+		{"::1", 123, false},
 	} {
-		got, err := p.Allows(netip.MustParseAddr(tt.ip),tt.port,"tcp")
-		if err != nil || got != tt.allow { t.Fatalf("got %v (%v) for %+v",got,err,tt) }
+		got, err := p.Allows(netip.MustParseAddr(tt.ip), tt.port, "tcp")
+		if err != nil || got != tt.allow {
+			t.Fatalf("got %v (%v) for %+v", got, err, tt)
+		}
 	}
-	a := &NetworkPolicy{Mode:NetworkAllowlist,Namespace:"agent-3",
-		Allow:[]NetworkRule{{CIDR:"203.0.113.0/24"}},
-		Block:[]NetworkRule{{CIDR:"203.0.113.2"}},
+	a := &NetworkPolicy{Mode: NetworkAllowlist, Namespace: "agent-3",
+		Allow: []NetworkRule{{CIDR: "203.0.113.0/24"}},
+		Block: []NetworkRule{{CIDR: "203.0.113.2"}},
 	}
-	if ok,_:=a.Allows(netip.MustParseAddr("203.0.113.2"),443,"tcp");ok { t.Fatal("block should override allow") }
-	if ok,_:=a.Allows(netip.MustParseAddr("203.0.113.3"),443,"tcp");!ok { t.Fatal("missing allow") }
+	if ok, _ := a.Allows(netip.MustParseAddr("203.0.113.2"), 443, "tcp"); ok {
+		t.Fatal("block should override allow")
+	}
+	if ok, _ := a.Allows(netip.MustParseAddr("203.0.113.3"), 443, "tcp"); !ok {
+		t.Fatal("missing allow")
+	}
 }
 
 func TestNetworkPolicyValidation(t *testing.T) {
 	good := &NetworkPolicy{Mode: NetworkAllowlist, Namespace: "agent-4",
 		Allow: []NetworkRule{{CIDR: "192.0.2.5", Port: 443}}}
 	for _, mutate := range []func(*NetworkPolicy){
-		func(p *NetworkPolicy){p.Mode="anything"},
-		func(p *NetworkPolicy){p.Namespace="../host"},
-		func(p *NetworkPolicy){p.Namespace=""},
-		func(p *NetworkPolicy){p.Namespace="-bad"},
-		func(p *NetworkPolicy){p.Allow=[]NetworkRule{{CIDR:"not-a-domain.example"}}},
-		func(p *NetworkPolicy){p.Allow=[]NetworkRule{{CIDR:"::ffff:127.0.0.1/128"}}},
-		func(p *NetworkPolicy){p.Allow=[]NetworkRule{{CIDR:"1.2.3.4",Protocol:"quic"}}},
+		func(p *NetworkPolicy) { p.Mode = "anything" },
+		func(p *NetworkPolicy) { p.Namespace = "../host" },
+		func(p *NetworkPolicy) { p.Namespace = "" },
+		func(p *NetworkPolicy) { p.Namespace = "-bad" },
+		func(p *NetworkPolicy) { p.Allow = []NetworkRule{{CIDR: "not-a-domain.example"}} },
+		func(p *NetworkPolicy) { p.Allow = []NetworkRule{{CIDR: "::ffff:127.0.0.1/128"}} },
+		func(p *NetworkPolicy) { p.Allow = []NetworkRule{{CIDR: "1.2.3.4", Protocol: "quic"}} },
 	} {
-		p:=*good
+		p := *good
 		mutate(&p)
-		if _,err:=compileNetworkPolicy(&p);err==nil {t.Fatalf("accepted %+v",p)}
+		if _, err := compileNetworkPolicy(&p); err == nil {
+			t.Fatalf("accepted %+v", p)
+		}
 	}
-	if _,err:=compileNetworkPolicy(&NetworkPolicy{Mode:NetworkBlocklist,Namespace:"sandbox",Allow:good.Allow});err==nil {
+	if _, err := compileNetworkPolicy(&NetworkPolicy{Mode: NetworkBlocklist, Namespace: "sandbox", Allow: good.Allow}); err == nil {
 		t.Fatal("accepted allow rules in blocklist")
 	}
-	p,err:=normalizeNetworkPolicy(good)
-	if err!=nil {t.Fatal(err)}
-	good.Allow[0].CIDR="0.0.0.0/0"
-	if p.Allow[0].CIDR!="192.0.2.5" {t.Fatal("policy rules share caller storage")}
-	if ok,_:=p.Allows(netip.MustParseAddr("192.0.2.5"),443,"tcp");!ok {t.Fatal("lost normalized policy")}
-	if _,err:=p.Allows(netip.MustParseAddr("192.0.2.5"),0,"tcp");err==nil {t.Fatal("accepted port zero destination")}
+	p, err := normalizeNetworkPolicy(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good.Allow[0].CIDR = "0.0.0.0/0"
+	if p.Allow[0].CIDR != "192.0.2.5" {
+		t.Fatal("policy rules share caller storage")
+	}
+	if ok, _ := p.Allows(netip.MustParseAddr("192.0.2.5"), 443, "tcp"); !ok {
+		t.Fatal("lost normalized policy")
+	}
+	if _, err := p.Allows(netip.MustParseAddr("192.0.2.5"), 0, "tcp"); err == nil {
+		t.Fatal("accepted port zero destination")
+	}
 }
 
 func TestNetworkPolicyRequiresExplicitNetworking(t *testing.T) {
-	root:=t.TempDir()
-	_,err:=New(Options{RootFS:root,NetworkPolicy:&NetworkPolicy{Mode:NetworkAllowlist,Namespace:"test"}})
-	if err==nil||!strings.Contains(err.Error(),"Network=true"){t.Fatalf("got %v",err)}
+	root := t.TempDir()
+	_, err := New(Options{RootFS: root, NetworkPolicy: &NetworkPolicy{Mode: NetworkAllowlist, Namespace: "test"}})
+	if err == nil || !strings.Contains(err.Error(), "Network=true") {
+		t.Fatalf("got %v", err)
+	}
 }
