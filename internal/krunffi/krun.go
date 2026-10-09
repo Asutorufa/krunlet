@@ -36,6 +36,7 @@ type Config struct {
 	RLimits           []string
 	Library           string
 	ErrorPath         string
+	RunID             string
 }
 
 type api struct {

@@ -47,6 +47,7 @@ type VM struct {
 	closed         bool
 	supervisor     *helperSupervisor
 	quotaRunner    *Runner
+	readyMillis int64
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -163,6 +164,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		networkCleanup: lease,
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
 		supervisor: supervisor, quotaRunner: sess.runner}
+	startBoot := time.Now()
 	if err = cmd.Start(); err != nil {
 		cancel()
 		_ = stdin.Close()
@@ -180,6 +182,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		}
 		return nil, fmt.Errorf("boot VM: %w; helper stderr: %s", err, v.stderr.String())
 	}
+	v.readyMillis=time.Since(startBoot).Milliseconds()
 	// Closing the owning context also reclaims the rootfs, gateway socket
 	// and VM permit even if the caller forgets an explicit Close.
 	go func() {
@@ -230,10 +233,24 @@ func (v *VM) await(ctx context.Context, target string) error {
 
 // Run executes in the already-booted VM. Commands are serialized. Unlike
 // Runner.Run, stdout/stderr are buffered in guest files until exit.
-func (v *VM) Run(ctx context.Context, req Request) (Result, error) {
+func (v *VM) Run(ctx context.Context, req Request) (res Result, runErr error) {
+	start:=time.Now()
+	runID:=newRunID()
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	res := Result{ExitCode: -1, Files: map[string][]byte{}}
+	defer func() {
+		var callback func(Stats)
+		var policyEnabled bool
+		if v.session != nil {
+			callback = v.session.runner.cfg.OnStats
+			policyEnabled = v.session.runner.cfg.NetworkPolicy != nil
+		}
+		v.mu.Unlock()
+		if callback != nil {
+			callback(Stats{RunID:runID,ReadyMillis:v.readyMillis,DurationMillis:time.Since(start).Milliseconds(),
+				ExitCode:res.ExitCode,PeakMemoryMiB:0,NetworkPolicy:policyEnabled,TimedOut:res.TimedOut})
+		}
+	}()
+	res = Result{ExitCode: -1,RunID:runID,Files:map[string][]byte{}}
 	if v.closed {
 		return res, errors.New("VM is closed or has failed")
 	}

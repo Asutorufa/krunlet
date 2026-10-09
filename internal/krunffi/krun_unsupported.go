@@ -20,6 +20,7 @@ type Config struct {
 	Network                             bool
 	RestrictedNetwork                   bool
 	NetSocket                           string
+	RunID                               string
 }
 
 var ErrUnsupported = errors.New("libkrun is only supported on linux/amd64, linux/arm64 and darwin/arm64")

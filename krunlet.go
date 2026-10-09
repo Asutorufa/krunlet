@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,6 +63,9 @@ type Options struct {
 	// MaxRootFSBytes limits logical file bytes in a disposable rootfs.
 	// Zero defaults to 1 GiB.
 	MaxRootFSBytes int64
+	// OnStats receives one snapshot for each completed or failed run.
+	// It is invoked after resource cleanup without holding Runner locks.
+	OnStats func(Stats)
 }
 
 type Request struct {
@@ -78,6 +82,7 @@ type Request struct {
 
 type Result struct {
 	ExitCode      int               `json:"exit_code"`
+	RunID string `json:"run_id,omitempty"`
 	Stdout        string            `json:"stdout"`
 	Stderr        string            `json:"stderr"`
 	Duration      time.Duration     `json:"duration"`
@@ -229,9 +234,19 @@ func (r *Runner) RunIO(ctx context.Context, req Request, stdin io.Reader, stdout
 	return r.run(ctx, req, stdin, stdout, stderr)
 }
 
-func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Result, error) {
+func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (result Result, retErr error) {
 	start := time.Now()
-	result := Result{ExitCode: -1, Files: map[string][]byte{}}
+	runID := newRunID()
+	result = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
+	var helperState *os.ProcessState
+	defer func(){
+		if cb:=r.cfg.OnStats;cb!=nil{
+			cb(Stats{RunID:runID,ReadyMillis:-1,DurationMillis:time.Since(start).Milliseconds(),
+				ExitCode:result.ExitCode,PeakMemoryMiB:helperPeakMemory(helperState),
+				NetworkPolicy:r.cfg.NetworkPolicy!=nil,TimedOut:result.TimedOut})
+		}
+	}()
+	slog.Debug("krunlet run admitted", "run_id", runID)
 	timeout := r.cfg.Timeout
 	if req.Timeout != 0 {
 		timeout = req.Timeout
@@ -330,7 +345,8 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
 		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath,
-		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil, NetSocket: lease.socket}
+		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil, NetSocket: lease.socket,
+		RunID: runID}
 	configFile, err := os.CreateTemp("", "krunlet-config-*.json")
 	if err != nil {
 		return result, err
@@ -371,6 +387,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	waitErr := cmd.Wait()
 	// Reap descendant processes even if the helper exited successfully.
 	supervisor.finish()
+	helperState=cmd.ProcessState
 	result.Duration = time.Since(start)
 	result.Stdout = out.String()
 	result.Stderr = errout.String()
