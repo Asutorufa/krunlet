@@ -58,8 +58,8 @@ func dialYuhaiin(ctx context.Context, cfg *YuhaiinConfig, protocol byte, source 
 	if protocol != 1 && protocol != 2 {
 		return nil, errors.New("unsupported yuhaiin transport")
 	}
-	src, err := netip.AddrFromSlice(source.AsSlice())
-	if err != nil || src.Is4() != dst.Is4() || src.Is6() != dst.Is6() || dstPort == 0 {
+	src, ok := netip.AddrFromSlice(source.AsSlice())
+	if !ok || src.Is4() != dst.Is4() || src.Is6() != dst.Is6() || dstPort == 0 {
 		return nil, errors.New("invalid IP family or destination in yuhaiin connection")
 	}
 	af := byte(4)
