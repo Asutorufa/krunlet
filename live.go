@@ -42,6 +42,7 @@ type VM struct {
 	hostControl string
 	statusPath  string
 	configPath  string
+	networkCleanup networkLease
 	next        uint64
 	closed      bool
 }
@@ -107,8 +108,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	payload := krunffi.Config{RootFS: sess.root, WorkDir: "/", Command: []string{"/bin/sh", "-c", liveDriver},
 		Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LANG=C.UTF-8"},
 		CPUs: cfg.CPUs, MemoryMiB: cfg.MemoryMiB, Network: cfg.Network, Ports: cfg.PortMaps, RLimits: cfg.RLimits,
-		Library: cfg.LibraryPath, ErrorPath: statusPath, Kernel: ffiKernel(cfg.Kernel),
-		RestrictedNetwork: cfg.NetworkPolicy != nil}
+		Library: cfg.LibraryPath, ErrorPath: statusPath, Kernel: ffiKernel(cfg.Kernel), RestrictedNetwork: cfg.NetworkPolicy != nil}
 	if err = json.NewEncoder(config).Encode(payload); err != nil {
 		_ = config.Close()
 		return nil, err
@@ -123,6 +123,16 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	vmCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	releaseNetwork, netErr := prepareNetwork(vmCtx, cfg.NetworkPolicy, cmd)
+	if netErr != nil {
+		cancel()
+		return nil, fmt.Errorf("network policy setup: %w", netErr)
+	}
+	defer func() {
+		if err != nil {
+			releaseNetwork()
+		}
+	}()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -141,6 +151,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		return nil, err
 	}
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
+		networkCleanup: releaseNetwork,
 		stderr: &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath}
 	if err = cmd.Start(); err != nil {
 		cancel()
@@ -439,6 +450,10 @@ func (v *VM) Close() error {
 	v.closed = true
 	_ = v.stdin.Close()
 	waitErr := v.cmd.Wait()
+	if v.networkCleanup != nil {
+		v.networkCleanup()
+		v.networkCleanup = nil
+	}
 	_ = os.Remove(v.statusPath)
 	_ = os.Remove(v.configPath)
 	err := v.session.Close()

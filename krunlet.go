@@ -37,6 +37,10 @@ type Options struct {
 	// Network opts into libkrun's TSI forwarding through the host network.
 	// False disables socket hijacking with krun_add_vsock(ctx, 0).
 	Network bool
+	// NetworkPolicy enforces host-side TSI egress IP/CIDR rules in a dedicated
+	// Linux network namespace. Requires Network=true. Without this policy,
+	// Network=true continues to allow unrestricted TSI host egress.
+	NetworkPolicy *NetworkPolicy
 	// Ephemeral copies the trusted rootfs into a private temp directory for
 	// every invocation, preventing guest changes from persisting. Default true.
 	// Setting false runs directly on RootFS and is not recommended for agents.
@@ -135,6 +139,17 @@ func New(opts Options) (*Runner, error) {
 	}
 	if !opts.Network && len(opts.PortMaps) > 0 {
 		return nil, errors.New("port mappings require Network=true")
+	}
+	if opts.NetworkPolicy != nil {
+		if !opts.Network {
+			return nil, errors.New("NetworkPolicy requires Network=true")
+		}
+		if len(opts.PortMaps) != 0 {
+			return nil, errors.New("NetworkPolicy does not support inbound PortMaps")
+		}
+		if opts.NetworkPolicy, err = normalizeNetworkPolicy(opts.NetworkPolicy); err != nil {
+			return nil, fmt.Errorf("network policy: %w", err)
+		}
 	}
 	for _, rl := range opts.RLimits {
 		if err = validateRLimit(rl); err != nil {
@@ -266,6 +281,13 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		helperArg = "__helper"
 	}
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
+	// Install the kernel-level namespace firewall BEFORE launching the
+	// helper. If enforcement is unavailable, never run with open egress.
+	releaseNetwork, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy, cmd)
+	if err != nil {
+		return result, fmt.Errorf("network policy setup: %w", err)
+	}
+	defer releaseNetwork()
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)
 	}
