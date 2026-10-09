@@ -140,17 +140,24 @@ func New(opts Options) (*Runner, error) {
 
 // Run executes a one-shot microVM, capturing stdout and stderr.
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
-	return r.run(ctx, req, nil, nil)
+	return r.run(ctx, req, nil, nil, nil)
 }
 
 // RunStream executes a one-shot microVM, streaming stdout/stderr to the
 // supplied writers while also retaining the bounded output in Result.
 // A writer failure aborts the VM. Nil writers discard the streamed copy.
 func (r *Runner) RunStream(ctx context.Context, req Request, stdout, stderr io.Writer) (Result, error) {
-	return r.run(ctx, req, stdout, stderr)
+	return r.run(ctx, req, nil, stdout, stderr)
 }
 
-func (r *Runner) run(ctx context.Context, req Request, stdout, stderr io.Writer) (Result, error) {
+// RunIO streams input from stdin and output to stdout/stderr. If stdin is
+// nil, Request.Stdin is used; a non-nil reader overrides it. Cancellation
+// stops the microVM. The Result still captures bounded stdout and stderr.
+func (r *Runner) RunIO(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Result, error) {
+	return r.run(ctx, req, stdin, stdout, stderr)
+}
+
+func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Result, error) {
 	start := time.Now()
 	result := Result{ExitCode: -1, Files: map[string][]byte{}}
 	if len(req.Command) == 0 {
@@ -252,7 +259,12 @@ func (r *Runner) run(ctx context.Context, req Request, stdout, stderr io.Writer)
 		helperArg = "__helper"
 	}
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
-	cmd.Stdin = strings.NewReader(req.Stdin)
+	if stdin == nil {
+		stdin = strings.NewReader(req.Stdin)
+	}
+	cmd.Stdin = stdin
+	// A blocked caller-provided reader must not indefinitely delay Wait on cancellation.
+	cmd.WaitDelay = 2 * time.Second
 	combined := &outputBudget{limit: r.cfg.MaxOutputBytes}
 	out := &limitedWriter{budget: combined, mirror: stdout}
 	errout := &limitedWriter{budget: combined, mirror: stderr}

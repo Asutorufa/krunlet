@@ -161,3 +161,22 @@ func TestLibraryNativeFailureIsError(t *testing.T) {
 		t.Fatalf("expected helper startup failure, got result=%+v err=%v", result, err)
 	}
 }
+
+func TestStreamingInput(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "helper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(Options{RootFS: t.TempDir(), HelperPath: script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	got, err := r.RunIO(context.Background(), Request{Command: []string{"/bin/cat"}, Stdin: "ignored"}, strings.NewReader("streamed"), &out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stdout != "streamed" || out.String() != "streamed" {
+		t.Fatalf("got %+v writer=%q", got, out.String())
+	}
+}

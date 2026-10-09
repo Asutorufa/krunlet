@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -58,6 +59,21 @@ func (s *Session) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	return s.runner.Run(ctx, req)
 }
+// RunIO streams a one-shot VM execution with a serialized reusable rootfs.
+func (s *Session) RunIO(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return Result{}, errors.New("session closed")
+	}
+	return s.runner.RunIO(ctx, req, stdin, stdout, stderr)
+}
+
+// RunStream forwards output as it arrives from a fresh VM in this session.
+func (s *Session) RunStream(ctx context.Context, req Request, stdout, stderr io.Writer) (Result, error) {
+	return s.RunIO(ctx, req, nil, stdout, stderr)
+}
+
 func (s *Session) Shell(ctx context.Context, script string) (Result, error) {
 	return s.Run(ctx, Request{Command: []string{"/bin/sh", "-lc", script}})
 }

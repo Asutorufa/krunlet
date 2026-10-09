@@ -304,3 +304,20 @@ a guest-side framing protocol and are not yet supported.
 
 The implementation intentionally does **not** claim production-safe host
 confinement without those platform-specific controls.
+### Streaming request input
+
+Use `RunIO` to forward an `io.Reader` to the guest without first
+buffering stdin in `Request.Stdin`. Streaming stdout and stderr remain
+bounded by `MaxOutputBytes`:
+
+```go
+result, err := runner.RunIO(ctx, krunlet.Request{
+    Command: []string{"/bin/cat"},
+}, inputReader, outputWriter, errorWriter)
+```
+
+`Session.RunIO` and `Session.RunStream` provide the same API for a
+filesystem-persistent session (each call still starts its own VM). A nil
+reader falls back to `Request.Stdin`. If a provided reader blocks forever,
+cancellation terminates the helper; the OS-level read itself may continue
+until the reader unblocks, so use context-aware input sources when possible.
