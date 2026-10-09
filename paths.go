@@ -90,15 +90,11 @@ func copyRootFS(ctx context.Context, src, dst string) error {
 				_ = in.Close()
 				return e
 			}
-			_, copyErr := io.Copy(out, &contextReader{ctx: ctx, reader: in})
+			copyErr := cloneFileData(ctx, in, out, tryReflink)
 			closeErr := out.Close()
 			inClose := in.Close()
-			if copyErr != nil {
-				return copyErr
-			}
-			if closeErr != nil {
-				return closeErr
-			}
+			if copyErr != nil { return copyErr }
+			if closeErr != nil { return closeErr }
 			return inClose
 		case fi.Mode()&os.ModeSymlink != 0:
 			target, e := os.Readlink(p)
@@ -155,4 +151,15 @@ func validateRLimit(s string) error {
 		}
 	}
 	return nil
+}
+
+// cloneFileData first attempts a copy-on-write reflink. If the filesystem
+// does not support it, ordinary copying preserves isolation without hardlinks.
+func cloneFileData(ctx context.Context, src, dst *os.File, tryClone func(*os.File,*os.File)(bool,error)) error {
+	if err:=ctx.Err();err!=nil{return err}
+	ok,err:=tryClone(src,dst)
+	if err!=nil{return err}
+	if ok{return nil}
+	_,err=io.Copy(dst,&contextReader{ctx:ctx,reader:src})
+	return err
 }
