@@ -37,3 +37,14 @@ func TestSessionFiles(t *testing.T) {
 		t.Fatal("write to closed session")
 	}
 }
+
+func TestSessionLibraryAutoHelper(t *testing.T) {
+	session, err := NewSession(context.Background(), Options{RootFS: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if !session.runner.autoHelper {
+		t.Fatal("session lost self-reexec helper mode")
+	}
+}
