@@ -32,5 +32,9 @@ func runSelfHelper(configPath string) error {
 	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
 		return err
 	}
-	return krunffi.Enter(cfg)
+	err = krunffi.Enter(cfg)
+	if err != nil && cfg.ErrorPath != "" {
+		_ = os.WriteFile(cfg.ErrorPath, []byte(err.Error()), 0600)
+	}
+	return err
 }
