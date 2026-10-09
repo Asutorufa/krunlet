@@ -30,21 +30,21 @@ import (
 // This protocol is intended for trusted infrastructure and is not a security
 // boundary against a malicious guest able to write to its control directory.
 type VM struct {
-	mu          sync.Mutex
-	stopOnce    sync.Once
-	stop        context.CancelFunc
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	stdout      *bufio.Reader
-	stderr      *boundedBuffer
-	session     *Session
-	control     string // guest absolute path
-	hostControl string
-	statusPath  string
-	configPath  string
+	mu             sync.Mutex
+	stopOnce       sync.Once
+	stop           context.CancelFunc
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	stdout         *bufio.Reader
+	stderr         *boundedBuffer
+	session        *Session
+	control        string // guest absolute path
+	hostControl    string
+	statusPath     string
+	configPath     string
 	networkCleanup networkLease
-	next        uint64
-	closed      bool
+	next           uint64
+	closed         bool
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -152,7 +152,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: releaseNetwork,
-		stderr: &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath}
+		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath}
 	if err = cmd.Start(); err != nil {
 		cancel()
 		_ = stdin.Close()
