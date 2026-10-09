@@ -17,7 +17,14 @@ jobs:
       - name: Fetch dependencies
         run: go mod download
       - name: Format check
-        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+        run: |
+          files=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$files" ]; then
+            echo "Files requiring gofmt:"
+            echo "$files"
+            gofmt -d $files
+            exit 1
+          fi
       - name: Test without CGO
         run: CGO_ENABLED=0 go test ./...
       - name: Vet
