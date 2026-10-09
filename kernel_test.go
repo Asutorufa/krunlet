@@ -65,6 +65,10 @@ func TestCustomKernelPassedToOneShotAndSession(t *testing.T) {
 	if err := os.WriteFile(kernel, []byte("test-image"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	realKernel, err := filepath.EvalSymlinks(kernel)
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "helper.json")
 	helper := filepath.Join(t.TempDir(), "helper")
@@ -90,7 +94,7 @@ func TestCustomKernelPassedToOneShotAndSession(t *testing.T) {
 		if err := json.Unmarshal(data, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Kernel == nil || payload.Kernel.Path != kernel || payload.Kernel.Format != 1 || payload.Kernel.Cmdline != "console=hvc0" {
+		if payload.Kernel == nil || payload.Kernel.Path != realKernel || payload.Kernel.Format != 1 || payload.Kernel.Cmdline != "console=hvc0" {
 			t.Fatalf("kernel missing in helper payload: %s", data)
 		}
 	}
