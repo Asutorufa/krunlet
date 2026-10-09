@@ -277,7 +277,6 @@ func (v *VM) Run(ctx context.Context, req Request) (res Result, runErr error) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	start := time.Now()
 	for name, b := range req.Files {
 		if err := v.session.WriteFile(name, b); err != nil {
 			return res, err
