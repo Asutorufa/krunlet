@@ -63,7 +63,9 @@ func dialYuhaiin(ctx context.Context, cfg *YuhaiinConfig, protocol byte, source 
 		return nil, errors.New("invalid IP family or destination in yuhaiin connection")
 	}
 	af := byte(4)
-	if src.Is6() { af = 6 }
+	if src.Is6() {
+		af = 6
+	}
 	header := make([]byte, 10, 42)
 	copy(header, "KRN1")
 	header[4], header[5] = protocol, af
@@ -72,9 +74,16 @@ func dialYuhaiin(ctx context.Context, cfg *YuhaiinConfig, protocol byte, source 
 	header = append(header, src.AsSlice()...)
 	header = append(header, dst.AsSlice()...)
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", cfg.Socket)
-	if err != nil { return nil, fmt.Errorf("connect yuhaiin inbound: %w", err) }
-	if deadline, ok := ctx.Deadline(); ok { _ = conn.SetDeadline(deadline) }
-	if err := writeYuhaiinFull(conn, header); err != nil { _ = conn.Close(); return nil, fmt.Errorf("yuhaiin inbound handshake: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("connect yuhaiin inbound: %w", err)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if err := writeYuhaiinFull(conn, header); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("yuhaiin inbound handshake: %w", err)
+	}
 	// No long-term I/O deadline: TLS, TCP and UDP flow lifetimes may exceed
 	// the connection setup timeout. The gateway closes it with the VM.
 	_ = conn.SetDeadline(time.Time{})
@@ -82,11 +91,13 @@ func dialYuhaiin(ctx context.Context, cfg *YuhaiinConfig, protocol byte, source 
 }
 
 // yuhaiinPacketConn preserves UDP datagram boundaries across Unix streams.
-type yuhaiinPacketConn struct { net.Conn }
+type yuhaiinPacketConn struct{ net.Conn }
 
 func (c *yuhaiinPacketConn) Read(b []byte) (int, error) {
 	var header [2]byte
-	if _, err := io.ReadFull(c.Conn, header[:]); err != nil { return 0, err }
+	if _, err := io.ReadFull(c.Conn, header[:]); err != nil {
+		return 0, err
+	}
 	n := int(binary.BigEndian.Uint16(header[:]))
 	if n == 0 || n > len(b) {
 		// Discard the full rejected payload to keep the framing aligned.
@@ -102,17 +113,25 @@ func (c *yuhaiinPacketConn) Write(data []byte) (int, error) {
 	}
 	var header [2]byte
 	binary.BigEndian.PutUint16(header[:], uint16(len(data)))
-	if err := writeYuhaiinFull(c.Conn, header[:]); err != nil { return 0, err }
-	if err := writeYuhaiinFull(c.Conn, data); err != nil { return 0, err }
+	if err := writeYuhaiinFull(c.Conn, header[:]); err != nil {
+		return 0, err
+	}
+	if err := writeYuhaiinFull(c.Conn, data); err != nil {
+		return 0, err
+	}
 	return len(data), nil
 }
 
 func writeYuhaiinFull(w io.Writer, b []byte) error {
-	for len(b)>0 {
-		n,err:=w.Write(b)
-		if err!=nil {return err}
-		if n<=0 {return io.ErrShortWrite}
-		b=b[n:]
+	for len(b) > 0 {
+		n, err := w.Write(b)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
 	}
 	return nil
 }

@@ -66,7 +66,9 @@ func prepareNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*Yuh
 		return nil, err
 	}
 	var yuhaiin *YuhaiinConfig
-	if len(upstream) != 0 { yuhaiin = upstream[0] }
+	if len(upstream) != 0 {
+		yuhaiin = upstream[0]
+	}
 	gw, err := newGuestNetwork(ctx, policy, yuhaiin)
 	if err != nil {
 		return nil, err
@@ -386,7 +388,9 @@ func newGuestNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*Yu
 	}
 	child, cancel := context.WithCancel(ctx)
 	g := &guestNetwork{wire: wire, link: link, dhcpServer: server, stack: s, ctx: child, cancel: cancel}
-	if len(upstream) != 0 { g.yuhaiin = upstream[0] }
+	if len(upstream) != 0 {
+		g.yuhaiin = upstream[0]
+	}
 	g.registerForwarders(policy)
 	go func() { _ = server.Serve() }()
 	return g, nil
@@ -479,7 +483,9 @@ func (g *guestNetwork) handleUDP(req *udp.ForwarderRequest, ip netip.Addr, port 
 		var err error
 		if g.yuhaiin != nil {
 			outbound, err = dialYuhaiin(g.ctx, g.yuhaiin, 2, source, sourcePort, ip, port)
-			if err == nil { outbound = &yuhaiinPacketConn{Conn: outbound} }
+			if err == nil {
+				outbound = &yuhaiinPacketConn{Conn: outbound}
+			}
 		} else {
 			outbound, err = (&net.Dialer{}).DialContext(g.ctx, destinationNetwork("udp", ip), net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
 		}

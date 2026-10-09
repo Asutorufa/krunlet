@@ -220,7 +220,9 @@ func run() int {
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
 			Kernel: customKernel, NetworkPolicy: networkPolicy,
 			Yuhaiin: func() *krunlet.YuhaiinConfig {
-				if *yuhaiin == "" { return nil }
+				if *yuhaiin == "" {
+					return nil
+				}
 				return &krunlet.YuhaiinConfig{Socket: *yuhaiin}
 			}()})
 		if e != nil {
