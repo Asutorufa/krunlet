@@ -150,3 +150,14 @@ func TestLibraryDoesNotRequireCLI(t *testing.T) {
 		t.Fatalf("helper = %q (auto=%t), want %q", r.cfg.HelperPath, r.autoHelper, exe)
 	}
 }
+
+func TestLibraryNativeFailureIsError(t *testing.T) {
+	r, err := New(Options{RootFS: t.TempDir(), LibraryPath: "/invalid/krunlet-missing-libkrun"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := r.Run(context.Background(), Request{Command: []string{"/bin/true"}})
+	if err == nil || !strings.Contains(err.Error(), "libkrun helper failed") || result.ExitCode != 125 {
+		t.Fatalf("expected helper startup failure, got result=%+v err=%v", result, err)
+	}
+}
