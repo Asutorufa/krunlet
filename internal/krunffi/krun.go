@@ -14,7 +14,15 @@ import (
 	"github.com/ebitengine/purego"
 )
 
+type KernelConfig struct {
+	Path    string
+	Format  uint32
+	Initrd  string
+	Cmdline string
+}
+
 type Config struct {
+	Kernel    *KernelConfig
 	RootFS    string
 	WorkDir   string
 	Command   []string
@@ -38,6 +46,7 @@ type api struct {
 	limits               func(uint32, unsafe.Pointer) int32
 	vsock                func(uint32, uint32) int32
 	disableImplicitVsock func(uint32) int32
+	kernel               func(uint32, string, uint32, unsafe.Pointer, unsafe.Pointer) int32
 	ports                func(uint32, unsafe.Pointer) int32
 	enter                func(uint32) int32
 }
@@ -76,6 +85,15 @@ func Enter(c Config) error {
 		}
 		purego.RegisterFunc(sym.fn, symbol)
 	}
+	// The custom-kernel symbol is only required when a custom kernel was
+	// requested, preserving compatibility with default-kernel installations.
+	if c.Kernel != nil {
+		symbol, e := purego.Dlsym(lib, "krun_set_kernel")
+		if e != nil {
+			return fmt.Errorf("custom kernel requires krun_set_kernel: %w", e)
+		}
+		purego.RegisterFunc(&a.kernel, symbol)
+	}
 	id := a.create()
 	if id < 0 {
 		return nativeError("krun_create_ctx", id)
@@ -86,6 +104,15 @@ func Enter(c Config) error {
 	defer a.free(ctx)
 	if err := check("krun_set_vm_config", a.vmConfig(ctx, c.CPUs, c.MemoryMiB)); err != nil {
 		return err
+	}
+	if c.Kernel != nil {
+		if err := withOptionalCString(c.Kernel.Initrd, func(initrd unsafe.Pointer) error {
+			return withOptionalCString(c.Kernel.Cmdline, func(cmdline unsafe.Pointer) error {
+				return check("krun_set_kernel", a.kernel(ctx, c.Kernel.Path, c.Kernel.Format, initrd, cmdline))
+			})
+		}); err != nil {
+			return err
+		}
 	}
 	if err := check("krun_set_root", a.root(ctx, c.RootFS)); err != nil {
 		return err
@@ -154,6 +181,21 @@ func withCStringArray(v []string, fn func(unsafe.Pointer) error) error {
 	err := fn(unsafe.Pointer(&ptrs[0]))
 	runtime.KeepAlive(bytes)
 	runtime.KeepAlive(ptrs)
+	return err
+}
+
+// withOptionalCString passes nil for unset optional C strings. Unlike a
+// Go string argument, a nil pointer is meaningful to krun_set_kernel.
+func withOptionalCString(s string, fn func(unsafe.Pointer) error) error {
+	if s == "" {
+		return fn(nil)
+	}
+	if strings.IndexByte(s, 0) >= 0 {
+		return fmt.Errorf("NUL byte in optional C string")
+	}
+	buf := append([]byte(s), 0)
+	err := fn(unsafe.Pointer(&buf[0]))
+	runtime.KeepAlive(buf)
 	return err
 }
 

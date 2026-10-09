@@ -82,6 +82,10 @@ func run() int {
 		stdinString := f.String("stdin", "", "literal guest stdin")
 		stdinFile := f.String("stdin-file", "", "guest stdin from host file or '-' for piped stdin")
 		lib := f.String("lib", "", "libkrun library path")
+		kernel := f.String("kernel", "", "host path to a custom Linux kernel image")
+		kernelFormat := f.String("kernel-format", "raw", "kernel format: raw, elf, pe-gz, image-bz2, image-gz, image-zstd")
+		initramfs := f.String("initramfs", "", "optional host path to initramfs (requires --kernel)")
+		kernelCmdline := f.String("kernel-cmdline", "", "optional Linux kernel command line (requires --kernel)")
 		net := f.Bool("network", false, "allow guest outbound network via TSI")
 		persistent := f.Bool("persistent", false, "allow changes to original rootfs (unsafe)")
 		jsonOut := f.Bool("json", false, "print structured result JSON")
@@ -157,9 +161,33 @@ func run() int {
 				return 2
 			}
 		}
+		var customKernel *krunlet.KernelConfig
+		if *kernel != "" {
+			format, e := krunlet.ParseKernelFormat(*kernelFormat)
+			if e != nil {
+				fmt.Fprintln(os.Stderr, e)
+				return 2
+			}
+			customKernel = &krunlet.KernelConfig{
+				Path: *kernel, Format: format, Initrd: *initramfs, Cmdline: *kernelCmdline,
+			}
+		} else {
+			var extraKernelFlag bool
+			f.Visit(func(fl *flag.Flag) {
+				switch fl.Name {
+				case "kernel-format", "initramfs", "kernel-cmdline":
+					extraKernelFlag = true
+				}
+			})
+			if extraKernelFlag {
+				fmt.Fprintln(os.Stderr, "--kernel-format, --initramfs and --kernel-cmdline require --kernel")
+				return 2
+			}
+		}
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
-			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib})
+			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
+			Kernel: customKernel})
 		if e != nil {
 			fmt.Fprintln(os.Stderr, e)
 			return 125

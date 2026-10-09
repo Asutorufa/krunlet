@@ -7,7 +7,7 @@
 ## Requirements
 
 - **Linux x86-64 / ARM64** with `/dev/kvm`, or **macOS Apple Silicon** (HVF). macOS requires the appropriate Hypervisor entitlement when applicable.
-- **libkrun v1.19.x** and its `libkrunfw` runtime dependencies; **NOT libkrun 2.x `main`**.
+- **libkrun v1.19.x** (**NOT** the incompatible libkrun 2.x `main` API). The default kernel needs `libkrunfw`; an external kernel supplied through `KernelConfig` can boot without it.
 - Trusted, prepared **Linux rootfs directory**, e.g. from an image you built and verified. It must contain the invoked binaries and libraries.
 - Go 1.23+ to build from source. No C compiler or cgo required to build the Go binary.
 
@@ -16,7 +16,7 @@
 **You do not put `libkrun.so` inside your Go module or inside the guest rootfs.**
 The `krunlet` helper runs on the **host** and calls `purego.Dlopen` at runtime.
 The host needs a native libkrun **1.19.x** shared library, its dependencies,
-and (where required) `libkrunfw` (the guest kernel payload).
+and, for the default kernel, `libkrunfw` (the guest kernel payload).
 Compiling Krunlet with `CGO_ENABLED=0` only removes the Go/C build dependency;
 it does **not** bundle these native libraries or the firmware.
 
@@ -106,6 +106,74 @@ krunlet run --rootfs /path/to/rootfs -- /bin/sh -c 'echo guest-ok'
 `doctor` is a dynamic loader/ABI check. A successful result is **not** proof
 that an actual VM boots or that host isolation is correctly configured.
 
+## Custom Linux kernels
+
+Krunlet defaults to the kernel shipped by `libkrunfw`. To boot your own
+kernel, set `Options.Kernel` (library) or `--kernel` (CLI). This calls
+`krun_set_kernel` in **libkrun 1.19.x** with a host-side kernel image,
+optional host-side initramfs, and optional command line. Nothing needs
+to be copied into the guest rootfs for these paths.
+
+**With an external kernel, the 1.19.x VM startup path skips the default
+`libkrunfw` kernel payload.** You still need `libkrun`, a compatible
+kernel, and the trusted guest rootfs. The default mode still requires
+`libkrunfw`. See the
+[libkrun header](https://github.com/libkrun/libkrun/blob/v1.19.6/include/libkrun.h)
+and [firmware sources](https://github.com/libkrun/libkrunfw).
+
+### Go library
+
+```go
+runner, err := krunlet.New(krunlet.Options{
+    RootFS: "/path/to/rootfs",
+    Kernel: &krunlet.KernelConfig{
+        Path:    "/host/kernels/Image",
+        Format:  krunlet.KernelFormatRaw,
+        Initrd:  "/host/kernels/initramfs.cpio.gz", // optional
+        Cmdline: "console=hvc0",                   // optional
+    },
+})
+if err != nil { panic(err) }
+result, err := runner.Shell(ctx, "uname -a")
+```
+
+The same `Options.Kernel` is supported by `NewSession` and `NewVM`.
+`New` verifies that the kernel and optional initramfs are readable regular
+host files, resolves them to absolute paths, and rejects unsupported formats.
+The file must remain accessible to the helper until VM startup. Paths and
+kernel command lines are **trusted host configuration**, never LLM-supplied.
+
+### CLI
+
+```sh
+# Example: ARM64 raw Image (adapt to your architecture)
+krunlet run --rootfs ./rootfs \
+  --kernel /host/kernels/Image --kernel-format raw \
+  --initramfs /host/kernels/initramfs.cpio.gz \
+  --kernel-cmdline "console=hvc0" -- /bin/uname -a
+
+# Omit --initramfs and --kernel-cmdline to let libkrun use its defaults.
+krunlet run --rootfs ./rootfs --kernel /host/kernels/vmlinux \
+  --kernel-format elf -- /bin/uname -a
+```
+
+Kernel formats: `raw` (0), `elf` (1), `pe-gz` (2),
+`image-bz2` (3), `image-gz` (4), `image-zstd` (5).
+`--kernel-format` defaults to `raw` when `--kernel` is set.
+`--initramfs`, `--kernel-cmdline`, and `--kernel-format` require `--kernel`.
+
+**x86-64 caveat:** libkrun 1.19.x handles `raw` kernels through
+`map_kernel()`, which ignores the separately supplied initramfs and
+cmdline. Krunlet rejects that combination to avoid silent misconfiguration.
+Choose a supported non-raw format if you need those options on x86-64.
+
+A generic distribution kernel is **not guaranteed to boot**: it must have
+the libkrun guest drivers and compatible init/virtio-fs behavior. TSI
+networking depends on libkrun-specific kernel support. Start from
+[libkrunfw's kernel config and patches](https://github.com/libkrun/libkrunfw)
+when possible. `doctor` only validates the native lib and host basics;
+run a real guest smoke test to validate your custom image.
+
 ## Install
 
 ```sh
@@ -176,6 +244,7 @@ No standalone CLI installation is necessary for Go imports. Krunlet re-executes 
 | Guest rlimits | `RLimits` | Numeric Linux resource IDs, e.g. `7=256:256` |
 | Networking | `Network` | Disabled by default via no-TSI vsock; enabling allows host-mediated egress |
 | Native library override | `LibraryPath` | Defaults to libkrun.so.1 / libkrun.dylib |
+| Custom guest kernel | `Kernel *KernelConfig` | Host path, format, optional initramfs and cmdline; nil uses libkrunfw |
 
 ## Isolation and limitations
 

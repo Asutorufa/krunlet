@@ -4,7 +4,15 @@ package krunffi
 
 import "errors"
 
+type KernelConfig struct {
+	Path    string
+	Format  uint32
+	Initrd  string
+	Cmdline string
+}
+
 type Config struct {
+	Kernel *KernelConfig
 	RootFS, WorkDir, Library, ErrorPath string
 	Command, Env, Ports, RLimits        []string
 	CPUs                                uint8

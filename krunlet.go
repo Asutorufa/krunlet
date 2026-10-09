@@ -26,6 +26,9 @@ type Options struct {
 	RootFS         string
 	HelperPath     string
 	LibraryPath    string
+	// Kernel selects a host-side kernel image. Nil uses the bundled libkrunfw
+	// kernel. Custom kernel paths are trusted host inputs, not guest paths.
+	Kernel         *KernelConfig
 	CPUs           uint8
 	MemoryMiB      uint32
 	Timeout        time.Duration
@@ -91,6 +94,9 @@ func New(opts Options) (*Runner, error) {
 		return nil, err
 	}
 	opts.RootFS = root
+	if opts.Kernel, err = normalizeKernel(opts.Kernel); err != nil {
+		return nil, fmt.Errorf("kernel: %w", err)
+	}
 	if opts.CPUs == 0 {
 		opts.CPUs = 2
 	}
@@ -238,7 +244,8 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	}
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
-		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath}
+		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath,
+		Kernel: ffiKernel(r.cfg.Kernel)}
 	configFile, err := os.CreateTemp("", "krunlet-config-*.json")
 	if err != nil {
 		return result, err
