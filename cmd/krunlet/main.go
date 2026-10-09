@@ -48,6 +48,9 @@ func run() int {
 			return 125
 		}
 		if e = krunffi.Enter(config); e != nil {
+			if config.ErrorPath != "" {
+				_ = os.WriteFile(config.ErrorPath, []byte(e.Error()), 0600)
+			}
 			fmt.Fprintln(os.Stderr, e)
 			return 125
 		}
