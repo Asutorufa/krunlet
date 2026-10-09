@@ -316,13 +316,14 @@ connectivity. No host interface needs that ULA prefix because connections
 are proxied rather than routed. Both address families use identical
 CIDR, port and protocol filtering.
 
-Example IPv6 allow rule:
+Example IPv6 allow rule, with curl's `--resolve` to preserve TLS
+verification without requiring guest DNS:
 
 ```sh
-krunlet run --rootfs ./rootfs --network \\
-  --net-mode allowlist --block-private \\
-  --allow-cidr '2606:4700:4700::1111/128,443,tcp' \\
-  -- /bin/sh -c 'curl -6 -k https://[2606:4700:4700::1111]/'
+krunlet run --rootfs ./rootfs --network \
+  --net-mode allowlist --block-private \
+  --allow-cidr '2606:4700:4700::1111/128,443,tcp' \
+  -- /bin/sh -c 'curl -6 --resolve "one.one.one.one:443:[2606:4700:4700::1111]" https://one.one.one.one/'
 ```
 
 **Current restrictions:**

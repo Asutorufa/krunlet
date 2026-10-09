@@ -219,18 +219,20 @@ func (w *guestWire) writeFrame(frame []byte) error {
 	}
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(frame)))
-	if _, err := w.conn.Write(hdr[:]); err != nil {
+	if err := writeFull(w.conn, hdr[:]); err != nil {
 		return err
 	}
-	for len(frame) > 0 {
-		n, err := w.conn.Write(frame)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		frame = frame[n:]
+	return writeFull(w.conn, frame)
+}
+
+// writeFull preserves the 4-byte length prefix and entire Ethernet payload
+// even if a stream writer returns a short successful write.
+func writeFull(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if err != nil { return err }
+		if n <= 0 { return io.ErrShortWrite }
+		data = data[n:]
 	}
 	return nil
 }
