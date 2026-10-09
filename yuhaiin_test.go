@@ -27,7 +27,10 @@ func TestYuhaiinFlowProtocol(t *testing.T) {
 		{2, "fd42:6b72:756e::2", "2606:4700:4700::1111"},
 	} {
 		t.Run(tt.target, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "inbound.sock")
+			dir, err := os.MkdirTemp("/tmp", "kny-")
+			if err != nil { t.Fatal(err) }
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			path := filepath.Join(dir, "inbound.sock")
 			l, err := net.Listen("unix", path)
 			if err != nil {
 				t.Fatal(err)
