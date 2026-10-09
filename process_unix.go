@@ -5,6 +5,7 @@ package krunlet
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -24,6 +25,21 @@ func configureHelper(cmd *exec.Cmd) *helperSupervisor {
 	cmd.Cancel = func() error { p.terminate(); return nil }
 	cmd.WaitDelay = 3 * time.Second
 	return p
+}
+
+// start pins the parent OS thread until the child has been reaped. Linux
+// Pdeathsig belongs to the creating *thread*; without this Go's scheduler
+// could retire that thread and spuriously terminate a live VM.
+func (p *helperSupervisor) start() error {
+	started:=make(chan error,1)
+	go func(){
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		err:=p.cmd.Start()
+		started<-err
+		if err==nil { <-p.ended }
+	}()
+	return <-started
 }
 
 func (p *helperSupervisor) terminate() {

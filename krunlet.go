@@ -379,7 +379,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	errout := &limitedWriter{budget: combined, mirror: stderr}
 	cmd.Stdout = out
 	cmd.Stderr = errout
-	err = cmd.Start()
+	err = supervisor.start()
 	if err != nil {
 		return result, fmt.Errorf("start helper: %w", err)
 	}

@@ -165,7 +165,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
 		supervisor: supervisor, quotaRunner: sess.runner}
 	startBoot := time.Now()
-	if err = cmd.Start(); err != nil {
+	if err = supervisor.start(); err != nil {
 		cancel()
 		_ = stdin.Close()
 		return nil, fmt.Errorf("start VM helper: %w", err)
