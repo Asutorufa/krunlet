@@ -347,6 +347,64 @@ krunlet run --rootfs ./rootfs --network \
 - Unit tests cover rule validation and gateway lifecycle. **Actual guest
   boot and egress policy bypass tests require a libkrun NET=1 host**.
 
+## Optional yuhaiin native inbound (Linux/macOS)
+
+Krunlet can delegate its **entire TCP/UDP egress path** to yuhaiin
+without SOCKS5, HTTP proxying, or a Go dependency on yuhaiin. This
+requires a corresponding `krunlet` inbound in yuhaiin, listening on a
+local Unix socket. The existing gVisor stack handles guest virtio-net,
+IPv4 DHCP, IPv6 SLAAC, and TCP/UDP reconstruction. Each flow is
+forwarded over a versioned, local Unix protocol to yuhaiin's normal
+inbound handler, where yuhaiin selects DNS/FakeIP and outbound routes.
+
+```text
+Guest virtio-net -> Krunlet gVisor -> local Unix socket
+       -> yuhaiin krunlet inbound -> DNS / route / rules / nodes
+```
+
+First configure a **krunlet** inbound in yuhaiin, with socket
+`/tmp/yuhaiin-krunlet.sock` (use an administrator-provisioned
+private directory for production). Then:
+
+```sh
+krunlet run --rootfs ./rootfs --network \
+  --yuhaiin-socket /tmp/yuhaiin-krunlet.sock \
+  -- /bin/sh -c 'echo network delegated'
+```
+
+Go:
+
+```go
+runner, err := krunlet.New(krunlet.Options{
+    RootFS: "./rootfs",
+    Network: true,
+    Yuhaiin: &krunlet.YuhaiinConfig{
+        Socket: "/tmp/yuhaiin-krunlet.sock",
+    },
+})
+```
+
+An optional `NetworkPolicy` can be specified **alongside** `Yuhaiin`
+to deny destinations before they reach yuhaiin. When omitted, no
+Krunlet CIDR restrictions are applied; yuhaiin takes responsibility
+for routing and filtering. A missing inbound, failed Unix connection,
+or invalid protocol handshake never falls back to direct networking.
+`--network` is still mandatory; `PortMaps` is not supported with this
+backend. The guest's IPv4 DHCP-provided DNS server is
+`192.168.127.1`; packets to UDP/TCP 53 are delivered to yuhaiin,
+provided yuhaiin DNS handling is enabled and any local policy permits
+those packets.
+
+The first protocol version carries IPv4/IPv6 TCP streams and UDP
+datagrams with destination IP/port and guest source IP/port. ICMP and
+other raw IP protocols are not handed to yuhaiin. Domain-based routing
+works when yuhaiin resolves DNS/FakeIP or inspects supported traffic;
+an IP-only flow alone does not magically contain its original hostname.
+The connector uses file permissions to restrict the Unix socket:
+run both programs under trusted local principals and do not expose
+the socket to untrusted users. yuhaiin's native inbound and Krunlet
+must use the matching protocol version.
+
 ## Isolation and limitations
 
 - `libkrun` defaults to TSI network when no conventional NIC is attached. Krunlet explicitly requests a vsock without TSI features when network is disabled, and sets an empty inbound port map. This needs runtime verification against your exact libkrun build before it can be relied upon as a security boundary.

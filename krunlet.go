@@ -41,6 +41,10 @@ type Options struct {
 	// outbound TCP/UDP connections before any host-side dial. It requires
 	// Network=true. Without a policy, Network=true uses unrestricted TSI.
 	NetworkPolicy *NetworkPolicy
+	// Yuhaiin redirects all gVisor TCP/UDP flows into a local yuhaiin
+	// krunlet inbound. This is not a SOCKS5 proxy and never falls back
+	// to a direct host connection. Requires Network=true.
+	Yuhaiin *YuhaiinConfig
 	// Ephemeral copies the trusted rootfs into a private temp directory for
 	// every invocation, preventing guest changes from persisting. Default true.
 	// Setting false runs directly on RootFS and is not recommended for agents.
@@ -139,6 +143,19 @@ func New(opts Options) (*Runner, error) {
 	}
 	if !opts.Network && len(opts.PortMaps) > 0 {
 		return nil, errors.New("port mappings require Network=true")
+	}
+	if opts.Yuhaiin != nil {
+		if !opts.Network {
+			return nil, errors.New("Yuhaiin requires Network=true")
+		}
+		if opts.Yuhaiin, err = normalizeYuhaiin(opts.Yuhaiin); err != nil {
+			return nil, fmt.Errorf("yuhaiin inbound: %w", err)
+		}
+		// A non-nil policy selects virtio-net (disabling TSI).
+		// Default no local CIDR restrictions; routing rules belong to yuhaiin.
+		if opts.NetworkPolicy == nil {
+			opts.NetworkPolicy = &NetworkPolicy{Mode: NetworkBlocklist}
+		}
 	}
 	if opts.NetworkPolicy != nil {
 		if !opts.Network {
@@ -247,7 +264,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	lease, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy)
+	lease, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy, r.cfg.Yuhaiin)
 	if err != nil {
 		return result, fmt.Errorf("gVisor network setup: %w", err)
 	}
