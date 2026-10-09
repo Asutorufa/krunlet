@@ -26,6 +26,11 @@ func NewSession(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 	opts = validated.cfg
+	// Preserve the self-reexec helper mode across the second New call.
+	// Otherwise, an auto-resolved HelperPath looks like an explicit CLI path.
+	if validated.autoHelper {
+		opts.HelperPath = ""
+	}
 	root := opts.RootFS
 	temp, err := os.MkdirTemp("", "krunlet-session-*")
 	if err != nil {
