@@ -30,6 +30,7 @@ type Config struct {
 	CPUs      uint8
 	MemoryMiB uint32
 	Network   bool
+	RestrictedNetwork bool
 	Ports     []string
 	RLimits   []string
 	Library   string
@@ -127,7 +128,19 @@ func Enter(c Config) error {
 	}
 	// Explicit vsock with no TSI flags disables TSI socket hijacking. This is
 	// essential: with no explicit override, legacy libkrun enables host egress.
-	if !c.Network {
+	if c.RestrictedNetwork {
+		if !c.Network {
+			return fmt.Errorf("restricted networking requires Network=true")
+		}
+		// Explicitly enable only AF_INET/AF_INET6 TSI. AF_UNIX host
+		// impersonation would not be subject to nftables IP OUTPUT rules.
+		if err := check("krun_disable_implicit_vsock", a.disableImplicitVsock(ctx)); err != nil {
+			return err
+		}
+		if err := check("krun_add_vsock(INET TSI)", a.vsock(ctx, 1)); err != nil {
+			return err
+		}
+	} else if !c.Network {
 		// libkrun 1.19 requires disabling its implicit vsock before adding
 		// a custom device with no TSI features.
 		if err := check("krun_disable_implicit_vsock", a.disableImplicitVsock(ctx)); err != nil {

@@ -243,8 +243,99 @@ No standalone CLI installation is necessary for Go imports. Krunlet re-executes 
 | Inbound ports | `PortMaps` | Host:guest, no implicit wildcard forwarding |
 | Guest rlimits | `RLimits` | Numeric Linux resource IDs, e.g. `7=256:256` |
 | Networking | `Network` | Disabled by default via no-TSI vsock; enabling allows host-mediated egress |
+| Restricted egress | `NetworkPolicy` | Linux dedicated netns + nftables IP/CIDR and port allow/block rules |
 | Native library override | `LibraryPath` | Defaults to libkrun.so.1 / libkrun.dylib |
 | Custom guest kernel | `Kernel *KernelConfig` | Host path, format, optional initramfs and cmdline; nil uses libkrunfw |
+
+
+## Restricted egress: IP/CIDR allowlists and blocklists (Linux)
+
+Krunlet supports IP/CIDR + TCP/UDP port policies for outgoing **TSI**
+connections. Enforcement is performed by **nftables in a dedicated Linux
+network namespace around the libkrun helper**. This is *not* a Go-side
+filter, guest-side iptables, or a DNS-only filter. It applies to the helper's
+host-side sockets. If the namespace, `ip`, `nft`, or rule installation is
+unavailable, launching the VM **fails closed**.
+
+**Host setup:** An administrator must supply a dedicated, existing Linux
+network namespace with its own route/NAT to reach approved external IPs.
+Krunlet does **not** provision virtual Ethernet or host NAT, and never
+writes rules to the host's initial network namespace. The namespace must
+not be shared with unrelated workloads and must not be modified by the
+guest or helper. Both `ip netns exec` and installing nftables rules require
+appropriate host privileges; run the VM helper with the minimum permissions
+necessary, and do not grant it `CAP_NET_ADMIN`. This backend is Linux-only:
+macOS reports unsupported rather than ignoring the policy.
+
+```sh
+# Provision a separate namespace (requires root or appropriate capabilities).
+sudo ip netns add krunlet-agent
+# IMPORTANT: Configure a veth pair, addressing, routes, and scoped NAT
+# before use. A newly created namespace has no internet route.
+sudo ip netns exec krunlet-agent ip address show
+sudo ip netns exec krunlet-agent ip route show
+# nftables and iproute2 must be installed and usable by the supervisor.
+```
+
+Go library example (IP allowlist, default-deny):
+
+```go
+runner, err := krunlet.New(krunlet.Options{
+    RootFS: "/trusted/rootfs",
+    Network: true,
+    NetworkPolicy: &krunlet.NetworkPolicy{
+        Mode: krunlet.NetworkAllowlist,
+        Namespace: "krunlet-agent",
+        BlockPrivateNetworks: true,
+        Allow: []krunlet.NetworkRule{
+            {CIDR: "1.1.1.1/32", Port: 443, Protocol: "tcp"},
+            {CIDR: "2606:4700:4700::1111/128", Port: 53, Protocol: "udp"},
+        },
+        Block: []krunlet.NetworkRule{
+            {CIDR: "1.1.1.2/32"}, // explicit DENY wins over ALLOW
+        },
+    },
+})
+```
+
+CLI equivalent:
+
+```sh
+krunlet run --rootfs ./rootfs --network \
+  --net-mode allowlist --netns krunlet-agent --block-private \
+  --allow-cidr 1.1.1.1,443,tcp \
+  --allow-cidr '2606:4700:4700::1111,53,udp' \
+  --block-cidr 1.1.1.2 \
+  -- /bin/sh -c 'echo restricted network'
+```
+
+`--allow-cidr` and `--block-cidr` accept `IP_OR_CIDR[,PORT[,tcp|udp]]`.
+A missing protocol matches both TCP and UDP; a missing port matches all
+ports of the selected transport. IPv4 and IPv6 are both covered. An empty
+allowlist denies all outgoing IPv4/IPv6 traffic. A blocklist accepts by
+default, except for explicit deny rules and optionally blocked private/local
+IP ranges. The same `NetworkPolicy` works with `Runner`, `Session` and
+`NewVM`. Inbound `PortMaps` are prohibited with restricted egress.
+
+**Limits and threat model:**
+
+- Domain-name rules are **not implemented**. Resolve trusted addresses and
+  list them explicitly; DNS and a domain name alone do not prove endpoint
+  identity. In allowlist mode permit the DNS server separately if needed.
+- Policies constrain destinations, not application payloads; an allowed IP
+  may host multiple virtual services. DNS rebinding and provider IP changes
+  require operator-maintained rules. UDP is covered by the explicit rules,
+  but the guest may be limited by the TSI kernel implementation.
+- The supplied namespace and its network connectivity are owned by an
+  administrator. Host network rules are installed before each helper
+  starts and removed after it exits. Keep namespace provisioning trusted;
+  a privileged/compromised helper could reconfigure its own firewall.
+- This does **not** replace host filesystem confinement, an unprivileged
+  helper, rootfs trust, or host resource quotas. The host must prevent
+  network capabilities and access to host services through other paths.
+- Unit tests check CIDR parsing, rule precedence and generated nftables
+  policy. Real firewall execution and guest egress behavior require a
+  privileged Linux/KVM integration environment.
 
 ## Isolation and limitations
 

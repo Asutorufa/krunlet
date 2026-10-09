@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,11 +88,16 @@ func run() int {
 		initramfs := f.String("initramfs", "", "optional host path to initramfs (requires --kernel)")
 		kernelCmdline := f.String("kernel-cmdline", "", "optional Linux kernel command line (requires --kernel)")
 		net := f.Bool("network", false, "allow guest outbound network via TSI")
+		netMode := f.String("net-mode", "", "restricted egress: allowlist or blocklist (requires --network)")
+		netNamespace := f.String("netns", "", "dedicated Linux network namespace for enforced egress")
+		blockPrivate := f.Bool("block-private", false, "reject private/local IP destinations in restricted mode")
 		persistent := f.Bool("persistent", false, "allow changes to original rootfs (unsafe)")
 		jsonOut := f.Bool("json", false, "print structured result JSON")
-		var envs, ports, limits, inputFiles, outputFiles repeated
+		var envs, ports, limits, inputFiles, outputFiles, allowCIDRs, blockCIDRs repeated
 		f.Var(&envs, "env", "guest environment KEY=VALUE (repeatable)")
 		f.Var(&ports, "port", "inbound port HOST:GUEST (repeatable; requires --network)")
+		f.Var(&allowCIDRs, "allow-cidr", "allow destination: IP_OR_CIDR[,PORT[,tcp|udp]] (repeatable)")
+		f.Var(&blockCIDRs, "block-cidr", "block destination: IP_OR_CIDR[,PORT[,tcp|udp]] (repeatable)")
 		f.Var(&limits, "rlimit", "Linux rlimit ID=SOFT:HARD (repeatable)")
 		f.Var(&inputFiles, "file", "host file into guest: GUEST=/host/path (repeatable)")
 		f.Var(&outputFiles, "collect", "guest result file to collect (repeatable; requires --json)")
@@ -184,10 +190,29 @@ func run() int {
 				return 2
 			}
 		}
+		var networkPolicy *krunlet.NetworkPolicy
+		if *netMode != "" {
+			networkPolicy = &krunlet.NetworkPolicy{
+				Mode: krunlet.NetworkMode(*netMode), Namespace: *netNamespace, BlockPrivateNetworks: *blockPrivate,
+			}
+			for _, spec := range allowCIDRs {
+				rule, e := parseNetworkRule(spec)
+				if e != nil { fmt.Fprintln(os.Stderr, "--allow-cidr:", e); return 2 }
+				networkPolicy.Allow = append(networkPolicy.Allow, rule)
+			}
+			for _, spec := range blockCIDRs {
+				rule, e := parseNetworkRule(spec)
+				if e != nil { fmt.Fprintln(os.Stderr, "--block-cidr:", e); return 2 }
+				networkPolicy.Block = append(networkPolicy.Block, rule)
+			}
+		} else if *netNamespace != "" || *blockPrivate || len(allowCIDRs) > 0 || len(blockCIDRs) > 0 {
+			fmt.Fprintln(os.Stderr, "--netns, --block-private, --allow-cidr, --block-cidr require --net-mode")
+			return 2
+		}
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
-			Kernel: customKernel})
+			Kernel: customKernel, NetworkPolicy: networkPolicy})
 		if e != nil {
 			fmt.Fprintln(os.Stderr, e)
 			return 125
@@ -240,4 +265,23 @@ func readLimited(path string, limit int64) ([]byte, error) {
 }
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage: krunlet run --rootfs DIR [flags] -- /bin/sh -lc 'echo hello' | doctor | version")
+}
+
+func parseNetworkRule(spec string) (krunlet.NetworkRule, error) {
+	pieces := strings.Split(spec, ",")
+	if len(pieces) < 1 || len(pieces) > 3 || pieces[0] == "" {
+		return krunlet.NetworkRule{}, fmt.Errorf("invalid rule %q", spec)
+	}
+	r := krunlet.NetworkRule{CIDR: pieces[0]}
+	if len(pieces) >= 2 {
+		p, err := strconv.ParseUint(pieces[1], 10, 16)
+		if err != nil || p == 0 {
+			return r, fmt.Errorf("invalid port in %q", spec)
+		}
+		r.Port = uint16(p)
+	}
+	if len(pieces) == 3 {
+		r.Protocol = pieces[2]
+	}
+	return r, nil
 }
