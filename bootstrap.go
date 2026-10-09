@@ -23,7 +23,9 @@ func init() {
 }
 
 func runSelfHelper(configPath string) error {
-	if err := watchHelperParent(); err != nil { return err }
+	if err := watchHelperParent(); err != nil {
+		return err
+	}
 	file, err := os.Open(configPath)
 	if err != nil {
 		return err

@@ -43,7 +43,10 @@ func NewSession(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 	marker, err := markTempRoot(temp)
-	if err != nil { _ = os.RemoveAll(temp); return nil, err }
+	if err != nil {
+		_ = os.RemoveAll(temp)
+		return nil, err
+	}
 	if err = copyRootFS(ctx, root, temp); err != nil {
 		_ = marker.Close()
 		_ = os.RemoveAll(temp)
@@ -196,6 +199,9 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.marker != nil { _ = s.marker.Close(); s.marker = nil }
+	if s.marker != nil {
+		_ = s.marker.Close()
+		s.marker = nil
+	}
 	return os.RemoveAll(s.root)
 }

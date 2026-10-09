@@ -93,8 +93,12 @@ func copyRootFS(ctx context.Context, src, dst string) error {
 			_, copyErr := io.Copy(out, &contextReader{ctx: ctx, reader: in})
 			closeErr := out.Close()
 			inClose := in.Close()
-			if copyErr != nil { return copyErr }
-			if closeErr != nil { return closeErr }
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
 			return inClose
 		case fi.Mode()&os.ModeSymlink != 0:
 			target, e := os.Readlink(p)

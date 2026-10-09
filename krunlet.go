@@ -13,9 +13,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Asutorufa/krunlet/internal/krunffi"
@@ -87,9 +87,9 @@ type Result struct {
 }
 
 type Runner struct {
-	cfg        Options
-	autoHelper bool
-	permits chan struct{}
+	cfg         Options
+	autoHelper  bool
+	permits     chan struct{}
 	cleanupOnce sync.Once
 }
 

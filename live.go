@@ -45,8 +45,8 @@ type VM struct {
 	networkCleanup *networkLease
 	next           uint64
 	closed         bool
-	supervisor *helperSupervisor
-	quotaRunner *Runner
+	supervisor     *helperSupervisor
+	quotaRunner    *Runner
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -76,8 +76,14 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 			_ = sess.Close()
 		}
 	}()
-	if err = sess.runner.acquire(ctx); err != nil { return nil, err }
-	defer func() { if err != nil { sess.runner.release() } }()
+	if err = sess.runner.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			sess.runner.release()
+		}
+	}()
 	folder, err := os.MkdirTemp(sess.root, ".krunlet-control-")
 	if err != nil {
 		return nil, err
@@ -156,7 +162,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
-		supervisor:supervisor,quotaRunner:sess.runner}
+		supervisor: supervisor, quotaRunner: sess.runner}
 	if err = cmd.Start(); err != nil {
 		cancel()
 		_ = stdin.Close()
@@ -457,7 +463,9 @@ func (v *VM) Close() error {
 	v.closed = true
 	_ = v.stdin.Close()
 	waitErr := v.cmd.Wait()
-	if v.supervisor != nil { v.supervisor.finish() }
+	if v.supervisor != nil {
+		v.supervisor.finish()
+	}
 	if v.networkCleanup != nil {
 		v.networkCleanup.Close()
 		v.networkCleanup = nil
