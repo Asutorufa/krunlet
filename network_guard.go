@@ -3,10 +3,10 @@
 package krunlet
 
 import (
-	"context"
-	"errors"
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,13 +37,13 @@ import (
 // Guest packets terminate at gVisor's TCP/UDP forwarders, which must consult
 // the policy before opening ANY host socket. No TSI path may be enabled.
 const (
-	gatewayIP     = "192.168.127.1"
-	gatewaySubnet = "192.168.127.0/24"
-	gatewayMAC    = "5a:94:ef:e4:0c:ee"
-	guestMAC      = "5a:94:ef:e4:0c:ef"
-	gatewayMTU    = 1500
-	gatewayIPv6Address = "fd42:6b72:756e::1"
-	gatewayIPv6Prefix = "fd42:6b72:756e::/64"
+	gatewayIP            = "192.168.127.1"
+	gatewaySubnet        = "192.168.127.0/24"
+	gatewayMAC           = "5a:94:ef:e4:0c:ee"
+	guestMAC             = "5a:94:ef:e4:0c:ef"
+	gatewayMTU           = 1500
+	gatewayIPv6Address   = "fd42:6b72:756e::1"
+	gatewayIPv6Prefix    = "fd42:6b72:756e::/64"
 	gatewayIPv6LinkLocal = "fe80::1"
 )
 
@@ -157,19 +157,25 @@ func (g *guestNetwork) Accept(ctx context.Context, conn net.Conn) error {
 	_ = g.wire.writeFrame(ipv6RouterAdvertisement())
 	for {
 		var hdr [4]byte
-		if _, err := io.ReadFull(conn, hdr[:]); err != nil { return err }
+		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+			return err
+		}
 		size := binary.BigEndian.Uint32(hdr[:])
 		if size < 14 || size > 65535 {
 			return fmt.Errorf("invalid guest Ethernet frame length: %d", size)
 		}
 		frame := make([]byte, int(size))
-		if _, err := io.ReadFull(conn, frame); err != nil { return err }
+		if _, err := io.ReadFull(conn, frame); err != nil {
+			return err
+		}
 		if !bytes.Equal(frame[6:12], guestMACBytes[:]) {
 			// The guest NIC has a fixed MAC. Reject spoofed source frames.
 			continue
 		}
 		proto := binary.BigEndian.Uint16(frame[12:14])
-		if proto != 0x0800 && proto != 0x0806 && proto != 0x86dd { continue }
+		if proto != 0x0800 && proto != 0x0806 && proto != 0x86dd {
+			continue
+		}
 		// A Router Solicitation triggers an immediate SLAAC announcement.
 		if isRouterSolicitation(frame) {
 			_ = g.wire.writeFrame(ipv6RouterAdvertisement())
@@ -185,7 +191,7 @@ func (g *guestNetwork) Accept(ctx context.Context, conn net.Conn) error {
 // guestWire replaces the generic Ethernet switch. With a single guest it
 // delivers both unicast and multicast (especially IPv6 NDP) to the VM.
 type guestWire struct {
-	mu sync.Mutex
+	mu   sync.Mutex
 	conn net.Conn
 }
 
@@ -208,14 +214,22 @@ func (w *guestWire) writeFrame(frame []byte) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.conn == nil { return errors.New("guest network is not connected") }
+	if w.conn == nil {
+		return errors.New("guest network is not connected")
+	}
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(frame)))
-	if _, err := w.conn.Write(hdr[:]); err != nil { return err }
+	if _, err := w.conn.Write(hdr[:]); err != nil {
+		return err
+	}
 	for len(frame) > 0 {
 		n, err := w.conn.Write(frame)
-		if err != nil { return err }
-		if n == 0 { return io.ErrShortWrite }
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
 		frame = frame[n:]
 	}
 	return nil
@@ -246,12 +260,12 @@ func ipv6RouterAdvertisement() []byte {
 	copy(ip[8:24], src[:])
 	copy(ip[24:40], dst[:])
 	icmp := frame[54:]
-	icmp[0], icmp[4] = 134, 64 // RA, hop limit
+	icmp[0], icmp[4] = 134, 64                  // RA, hop limit
 	binary.BigEndian.PutUint16(icmp[6:8], 1800) // default router lifetime
-	icmp[16], icmp[17] = 1, 1 // source link-layer MAC option
+	icmp[16], icmp[17] = 1, 1                   // source link-layer MAC option
 	copy(icmp[18:24], gatewayMACBytes[:])
-	icmp[24], icmp[25], icmp[26] = 3, 4, 64 // Prefix Information, 32 bytes, /64
-	icmp[27] = 0xc0 // on-link, autonomous address configuration
+	icmp[24], icmp[25], icmp[26] = 3, 4, 64        // Prefix Information, 32 bytes, /64
+	icmp[27] = 0xc0                                // on-link, autonomous address configuration
 	binary.BigEndian.PutUint32(icmp[28:32], 86400) // valid lifetime
 	binary.BigEndian.PutUint32(icmp[32:36], 14400) // preferred lifetime
 	prefix := netip.MustParsePrefix(gatewayIPv6Prefix).Addr().As16()
@@ -271,9 +285,13 @@ func internetChecksum(chunks ...[]byte) uint16 {
 			sum += uint32(binary.BigEndian.Uint16(b[:2]))
 			b = b[2:]
 		}
-		if len(b) != 0 { sum += uint32(b[0]) << 8 }
+		if len(b) != 0 {
+			sum += uint32(b[0]) << 8
+		}
 	}
-	for sum>>16 != 0 { sum = (sum & 0xffff) + (sum >> 16) }
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
 	return ^uint16(sum)
 }
 
@@ -339,9 +357,15 @@ func newGuestNetwork(ctx context.Context, policy *NetworkPolicy) (*guestNetwork,
 		return nil, fmt.Errorf("configure route: %s", e)
 	}
 	_, subnet6, err := net.ParseCIDR(gatewayIPv6Prefix)
-	if err != nil { s.Close(); return nil, err }
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
 	dst6, e := tcpip.NewSubnet(tcpip.AddrFromSlice(subnet6.IP.To16()), tcpip.MaskFromBytes(subnet6.Mask))
-	if e != nil { s.Close(); return nil, fmt.Errorf("configure IPv6 route: %s", e) }
+	if e != nil {
+		s.Close()
+		return nil, fmt.Errorf("configure IPv6 route: %s", e)
+	}
 	s.SetRouteTable([]tcpip.Route{
 		{Destination: dst, NIC: 1},
 		{Destination: dst6, NIC: 1},
@@ -390,7 +414,9 @@ func (g *guestNetwork) registerForwarders(policy *NetworkPolicy) {
 // destinationNetwork selects the address family explicitly: an IPv6 policy
 // decision cannot accidentally fall through to an IPv4 or DNS-backed dial.
 func destinationNetwork(protocol string, ip netip.Addr) string {
-	if ip.Is6() { return protocol + "6" }
+	if ip.Is6() {
+		return protocol + "6"
+	}
 	return protocol + "4"
 }
 
