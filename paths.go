@@ -85,17 +85,17 @@ func copyRootFS(ctx context.Context, src, dst string) error {
 			if e != nil {
 				return e
 			}
-			defer in.Close()
 			out, e := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm())
 			if e != nil {
+				_ = in.Close()
 				return e
 			}
 			_, copyErr := io.Copy(out, &contextReader{ctx: ctx, reader: in})
 			closeErr := out.Close()
-			if copyErr != nil {
-				return copyErr
-			}
-			return closeErr
+			inClose := in.Close()
+			if copyErr != nil { return copyErr }
+			if closeErr != nil { return closeErr }
+			return inClose
 		case fi.Mode()&os.ModeSymlink != 0:
 			target, e := os.Readlink(p)
 			if e != nil {

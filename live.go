@@ -45,6 +45,8 @@ type VM struct {
 	networkCleanup *networkLease
 	next           uint64
 	closed         bool
+	supervisor *helperSupervisor
+	quotaRunner *Runner
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -74,6 +76,8 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 			_ = sess.Close()
 		}
 	}()
+	if err = sess.runner.acquire(ctx); err != nil { return nil, err }
+	defer func() { if err != nil { sess.runner.release() } }()
 	folder, err := os.MkdirTemp(sess.root, ".krunlet-control-")
 	if err != nil {
 		return nil, err
@@ -131,7 +135,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}
 	vmCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	supervisor := configureHelper(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -151,7 +155,8 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
-		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath}
+		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
+		supervisor:supervisor,quotaRunner:sess.runner}
 	if err = cmd.Start(); err != nil {
 		cancel()
 		_ = stdin.Close()
@@ -163,22 +168,25 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	if err = v.await(startupCtx, "KRUNLET_READY"); err != nil {
 		v.terminate()
 		_ = cmd.Wait()
+		supervisor.finish()
 		if b, e := os.ReadFile(statusPath); e == nil && len(b) > 0 {
 			return nil, fmt.Errorf("libkrun helper: %s", strings.TrimSpace(string(b)))
 		}
 		return nil, fmt.Errorf("boot VM: %w; helper stderr: %s", err, v.stderr.String())
 	}
+	// Closing the owning context also reclaims the rootfs, gateway socket
+	// and VM permit even if the caller forgets an explicit Close.
+	go func() {
+		<-vmCtx.Done()
+		_ = v.Close()
+	}()
 	return v, nil
 }
 
 func (v *VM) terminate() {
 	v.stopOnce.Do(func() {
 		v.stop()
-		if v.cmd.Process != nil {
-			// Kill subprocesses in the helper's process group too.
-			_ = syscall.Kill(-v.cmd.Process.Pid, syscall.SIGKILL)
-			_ = v.cmd.Process.Kill()
-		}
+		v.supervisor.terminate()
 	})
 }
 
@@ -449,6 +457,7 @@ func (v *VM) Close() error {
 	v.closed = true
 	_ = v.stdin.Close()
 	waitErr := v.cmd.Wait()
+	if v.supervisor != nil { v.supervisor.finish() }
 	if v.networkCleanup != nil {
 		v.networkCleanup.Close()
 		v.networkCleanup = nil
@@ -457,6 +466,10 @@ func (v *VM) Close() error {
 	_ = os.Remove(v.configPath)
 	err := v.session.Close()
 	v.session = nil
+	if v.quotaRunner != nil {
+		v.quotaRunner.release()
+		v.quotaRunner = nil
+	}
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sort"
 	"strings"
 	"time"
@@ -53,6 +54,14 @@ type Options struct {
 	PortMaps []string
 	// RLimits are Linux rlimit strings like "7=256:256" (RLIMIT_NOFILE).
 	RLimits []string
+	// MaxConcurrentVMs bounds concurrently executing helpers per Runner.
+	// Zero defaults to max(1, min(4, runtime.NumCPU()/2)).
+	MaxConcurrentVMs int
+	// FailFast rejects a run with ErrTooManyVMs instead of queuing.
+	FailFast bool
+	// MaxRootFSBytes limits logical file bytes in a disposable rootfs.
+	// Zero defaults to 1 GiB.
+	MaxRootFSBytes int64
 }
 
 type Request struct {
@@ -80,11 +89,16 @@ type Result struct {
 type Runner struct {
 	cfg        Options
 	autoHelper bool
+	permits chan struct{}
+	cleanupOnce sync.Once
 }
 
 func New(opts Options) (*Runner, error) {
 	if opts.RootFS == "" {
 		return nil, errors.New("RootFS is required")
+	}
+	if !filepath.IsAbs(opts.RootFS) {
+		return nil, errors.New("RootFS must be an absolute host path")
 	}
 	root, err := filepath.Abs(opts.RootFS)
 	if err != nil {
@@ -100,6 +114,14 @@ func New(opts Options) (*Runner, error) {
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, err
+	}
+	if root == string(filepath.Separator) {
+		return nil, errors.New("host root / cannot be a VM rootfs")
+	}
+	if home, e := os.UserHomeDir(); e == nil && home != "" {
+		if canonical, e := filepath.EvalSymlinks(home); e == nil && root == canonical {
+			return nil, errors.New("host home directory cannot be a VM rootfs")
+		}
 	}
 	opts.RootFS = root
 	if opts.Kernel, err = normalizeKernel(opts.Kernel); err != nil {
@@ -120,10 +142,22 @@ func New(opts Options) (*Runner, error) {
 	if opts.MaxFileBytes == 0 {
 		opts.MaxFileBytes = 4 << 20
 	}
+	if opts.MaxRootFSBytes == 0 {
+		opts.MaxRootFSBytes = 1 << 30
+	}
+	if opts.MaxConcurrentVMs == 0 {
+		opts.MaxConcurrentVMs = runtime.NumCPU() / 2
+		if opts.MaxConcurrentVMs < 1 {
+			opts.MaxConcurrentVMs = 1
+		}
+		if opts.MaxConcurrentVMs > 4 {
+			opts.MaxConcurrentVMs = 4
+		}
+	}
 	if opts.CPUs > 64 || opts.MemoryMiB < 128 || opts.MemoryMiB > 65536 {
 		return nil, errors.New("CPU or memory limit out of range")
 	}
-	if opts.Timeout < 0 || opts.MaxOutputBytes < 0 || opts.MaxFileBytes < 0 {
+	if opts.Timeout < 0 || opts.MaxOutputBytes < 0 || opts.MaxFileBytes < 0 || opts.MaxRootFSBytes < 0 || opts.MaxConcurrentVMs < 0 {
 		return nil, errors.New("limits cannot be negative")
 	}
 	// The library is self-contained: by default its importing executable
@@ -173,7 +207,7 @@ func New(opts Options) (*Runner, error) {
 			return nil, err
 		}
 	}
-	return &Runner{cfg: opts, autoHelper: autoHelper}, nil
+	return &Runner{cfg: opts, autoHelper: autoHelper, permits: make(chan struct{}, opts.MaxConcurrentVMs)}, nil
 }
 
 // Run executes a one-shot microVM, capturing stdout and stderr.
@@ -198,6 +232,21 @@ func (r *Runner) RunIO(ctx context.Context, req Request, stdin io.Reader, stdout
 func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Result, error) {
 	start := time.Now()
 	result := Result{ExitCode: -1, Files: map[string][]byte{}}
+	timeout := r.cfg.Timeout
+	if req.Timeout != 0 {
+		timeout = req.Timeout
+	}
+	if timeout < 0 {
+		return result, errors.New("negative timeout")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := r.acquire(callCtx); err != nil {
+		return result, err
+	}
+	defer r.release()
+	r.cleanupOnce.Do(func() { _ = cleanupStaleRoots(os.TempDir(), 24*time.Hour) })
+
 	if len(req.Command) == 0 {
 		return result, errors.New("guest command is required")
 	}
@@ -214,13 +263,21 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	}
 	root := r.cfg.RootFS
 	if !r.cfg.Persistent {
+		if err := checkRootFSSize(callCtx, root, r.cfg.MaxRootFSBytes); err != nil {
+			return result, fmt.Errorf("rootfs preflight: %w", err)
+		}
 		var err error
 		root, err = os.MkdirTemp("", "krunlet-root-*")
 		if err != nil {
 			return result, err
 		}
-		defer os.RemoveAll(root)
-		if err = copyRootFS(ctx, r.cfg.RootFS, root); err != nil {
+		marker, err := markTempRoot(root)
+		if err != nil {
+			_ = os.RemoveAll(root)
+			return result, err
+		}
+		defer func() { _ = marker.Close(); _ = os.RemoveAll(root) }()
+		if err = copyRootFS(callCtx, r.cfg.RootFS, root); err != nil {
 			return result, fmt.Errorf("stage rootfs: %w", err)
 		}
 	}
@@ -255,15 +312,6 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	for _, key := range keys {
 		env = append(env, key+"="+req.Env[key])
 	}
-	timeout := r.cfg.Timeout
-	if req.Timeout != 0 {
-		timeout = req.Timeout
-	}
-	if timeout < 0 {
-		return result, errors.New("negative timeout")
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	lease, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy, r.cfg.Yuhaiin)
 	if err != nil {
 		return result, fmt.Errorf("gVisor network setup: %w", err)
@@ -303,12 +351,13 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		helperArg = "__helper"
 	}
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
+	supervisor := configureHelper(cmd)
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)
 	}
 	cmd.Stdin = stdin
 	// A blocked caller-provided reader must not indefinitely delay Wait on cancellation.
-	cmd.WaitDelay = 2 * time.Second
+	cmd.WaitDelay = 3 * time.Second
 	combined := &outputBudget{limit: r.cfg.MaxOutputBytes}
 	out := &limitedWriter{budget: combined, mirror: stdout}
 	errout := &limitedWriter{budget: combined, mirror: stderr}
@@ -318,8 +367,10 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	if err != nil {
 		return result, fmt.Errorf("start helper: %w", err)
 	}
-	combined.setKill(func() { _ = cmd.Process.Kill() })
+	combined.setKill(func() { signalHelperGroup(cmd, true) })
 	waitErr := cmd.Wait()
+	// Reap descendant processes even if the helper exited successfully.
+	supervisor.finish()
 	result.Duration = time.Since(start)
 	result.Stdout = out.String()
 	result.Stderr = errout.String()

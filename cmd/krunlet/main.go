@@ -36,6 +36,10 @@ func run() int {
 		if f.Parse(os.Args[2:]) != nil || *name == "" {
 			return 125
 		}
+		if e := krunlet.HelperParentWatch(); e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			return 125
+		}
 		h, e := os.Open(*name)
 		if e != nil {
 			fmt.Fprintln(os.Stderr, e)
@@ -92,6 +96,10 @@ func run() int {
 		yuhaiin := f.String("yuhaiin-socket", "", "delegate guest networking to local yuhaiin krunlet inbound Unix socket")
 		blockPrivate := f.Bool("block-private", false, "reject private/local IP destinations in restricted mode")
 		persistent := f.Bool("persistent", false, "allow changes to original rootfs (unsafe)")
+		maxConcurrent := f.Int("max-concurrent-vms", 0, "per-Runner concurrent VM limit (default min(4,NumCPU/2))")
+		failFast := f.Bool("fail-fast", false, "return ErrTooManyVMs instead of waiting")
+		maxRootFS := f.Int64("max-rootfs-bytes", 1<<30, "logical bytes allowed in staged rootfs")
+
 		jsonOut := f.Bool("json", false, "print structured result JSON")
 		var envs, ports, limits, inputFiles, outputFiles, allowCIDRs, blockCIDRs repeated
 		f.Var(&envs, "env", "guest environment KEY=VALUE (repeatable)")
@@ -215,10 +223,14 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "--block-private, --allow-cidr, --block-cidr require --net-mode")
 			return 2
 		}
+		if *persistent {
+			fmt.Fprintln(os.Stderr, "WARNING: --persistent writes directly into the trusted host rootfs; this is not safe for untrusted commands")
+		}
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
 			Kernel: customKernel, NetworkPolicy: networkPolicy,
+			MaxConcurrentVMs: *maxConcurrent, FailFast: *failFast, MaxRootFSBytes: *maxRootFS,
 			Yuhaiin: func() *krunlet.YuhaiinConfig {
 				if *yuhaiin == "" {
 					return nil
