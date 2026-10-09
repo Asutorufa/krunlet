@@ -13,9 +13,13 @@ import (
 
 func TestLiveScriptQuotes(t *testing.T) {
 	script, err := makeLiveScript(Request{Command: []string{"/bin/echo", "a'b", "$(touch /tmp/bad)"}, WorkDir: "/work/it's", Env: map[string]string{"TITLE": "a'b"}}, "/.krunlet/job")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"cd '/work/it'\\''s'", "'a'\\''b'", "'$(touch /tmp/bad)'", "export TITLE='a'\\''b'"} {
-		if !strings.Contains(script, want) { t.Errorf("missing %q from %q", want, script) }
+		if !strings.Contains(script, want) {
+			t.Errorf("missing %q from %q", want, script)
+		}
 	}
 	if _, err := makeLiveScript(Request{Command: []string{"ok"}, Env: map[string]string{"X-Y": "bad"}}, "/x"); err == nil {
 		t.Fatal("invalid environment name accepted")
@@ -39,39 +43,63 @@ func fakeLiveHelper(t *testing.T, hang bool) string {
 	if hang {
 		body = strings.Replace(body, "  printf 'KRUNLET_DONE:", "  sleep 5\n  printf 'KRUNLET_DONE:", 1)
 	}
-	if err := os.WriteFile(file, []byte(body), 0700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(file, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
 	return file
 }
 
 func TestPersistentVMReuse(t *testing.T) {
-	vm, err := NewVM(context.Background(), Options{RootFS:t.TempDir(), HelperPath:fakeLiveHelper(t,false), Timeout:time.Second})
-	if err != nil { t.Fatal(err) }
-	defer vm.Close()
-	for i:=0; i<2; i++ {
-		r,e:=vm.Run(context.Background(), Request{Command:[]string{"/bin/echo","ok"},Files:map[string][]byte{"/work/in.txt":[]byte("hello")}})
-		if e!=nil { t.Fatal(e) }
-		if r.ExitCode!=7 || r.Stdout!="mock-stdout\n" || r.Stderr!="mock-stderr\n" { t.Fatalf("unexpected: %+v",r) }
+	vm, err := NewVM(context.Background(), Options{RootFS: t.TempDir(), HelperPath: fakeLiveHelper(t, false), Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
 	}
-	file,e:=vm.session.ReadFile("/work/in.txt")
-	if e!=nil || !bytes.Equal(file,[]byte("hello")) { t.Fatalf("file %q: %v",file,e) }
+	defer vm.Close()
+	for i := 0; i < 2; i++ {
+		r, e := vm.Run(context.Background(), Request{Command: []string{"/bin/echo", "ok"}, Files: map[string][]byte{"/work/in.txt": []byte("hello")}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if r.ExitCode != 7 || r.Stdout != "mock-stdout\n" || r.Stderr != "mock-stderr\n" {
+			t.Fatalf("unexpected: %+v", r)
+		}
+	}
+	file, e := vm.session.ReadFile("/work/in.txt")
+	if e != nil || !bytes.Equal(file, []byte("hello")) {
+		t.Fatalf("file %q: %v", file, e)
+	}
 }
 
 func TestPersistentVMTimeout(t *testing.T) {
-	vm,err:=NewVM(context.Background(),Options{RootFS:t.TempDir(),HelperPath:fakeLiveHelper(t,true),Timeout:time.Second})
-	if err!=nil {t.Fatal(err)}
+	vm, err := NewVM(context.Background(), Options{RootFS: t.TempDir(), HelperPath: fakeLiveHelper(t, true), Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer vm.Close()
-	result,e:=vm.Run(context.Background(),Request{Command:[]string{"/bin/true"},Timeout:25*time.Millisecond})
-	if !errors.Is(e,context.DeadlineExceeded) || !result.TimedOut {t.Fatalf("result %+v: %v",result,e)}
-	if _,e=vm.Shell(context.Background(),"true"); e==nil {t.Fatal("reused stopped VM")}
+	result, e := vm.Run(context.Background(), Request{Command: []string{"/bin/true"}, Timeout: 25 * time.Millisecond})
+	if !errors.Is(e, context.DeadlineExceeded) || !result.TimedOut {
+		t.Fatalf("result %+v: %v", result, e)
+	}
+	if _, e = vm.Shell(context.Background(), "true"); e == nil {
+		t.Fatal("reused stopped VM")
+	}
 }
 
 func TestOneShotStreaming(t *testing.T) {
-	file:=filepath.Join(t.TempDir(),"helper")
-	if e:=os.WriteFile(file,[]byte("#!/bin/sh\nprintf 'hello'; printf 'world' >&2\n"),0700);e!=nil {t.Fatal(e)}
-	r,e:=New(Options{RootFS:t.TempDir(),HelperPath:file})
-	if e!=nil {t.Fatal(e)}
-	var out,stderr bytes.Buffer
-	result,e:=r.RunStream(context.Background(),Request{Command:[]string{"/bin/true"}},&out,&stderr)
-	if e!=nil {t.Fatal(e)}
-	if out.String()!="hello" || stderr.String()!="world" || result.Stdout!="hello" || result.Stderr!="world" {t.Fatalf("unexpected result: %+v",result)}
+	file := filepath.Join(t.TempDir(), "helper")
+	if e := os.WriteFile(file, []byte("#!/bin/sh\nprintf 'hello'; printf 'world' >&2\n"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	r, e := New(Options{RootFS: t.TempDir(), HelperPath: file})
+	if e != nil {
+		t.Fatal(e)
+	}
+	var out, stderr bytes.Buffer
+	result, e := r.RunStream(context.Background(), Request{Command: []string{"/bin/true"}}, &out, &stderr)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if out.String() != "hello" || stderr.String() != "world" || result.Stdout != "hello" || result.Stderr != "world" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
 }

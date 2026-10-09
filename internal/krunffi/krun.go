@@ -29,17 +29,17 @@ type Config struct {
 }
 
 type api struct {
-	create   func() int32
-	free     func(uint32) int32
-	vmConfig func(uint32, uint8, uint32) int32
-	root     func(uint32, string) int32
-	workdir  func(uint32, string) int32
-	exec     func(uint32, string, unsafe.Pointer, unsafe.Pointer) int32
-	limits   func(uint32, unsafe.Pointer) int32
-	vsock    func(uint32, uint32) int32
+	create               func() int32
+	free                 func(uint32) int32
+	vmConfig             func(uint32, uint8, uint32) int32
+	root                 func(uint32, string) int32
+	workdir              func(uint32, string) int32
+	exec                 func(uint32, string, unsafe.Pointer, unsafe.Pointer) int32
+	limits               func(uint32, unsafe.Pointer) int32
+	vsock                func(uint32, uint32) int32
 	disableImplicitVsock func(uint32) int32
-	ports    func(uint32, unsafe.Pointer) int32
-	enter    func(uint32) int32
+	ports                func(uint32, unsafe.Pointer) int32
+	enter                func(uint32) int32
 }
 
 // Enter configures and starts a VM; success never returns. Only invoke in a

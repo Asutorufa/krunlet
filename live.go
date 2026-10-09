@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Asutorufa/krunlet/internal/krunffi"
@@ -120,6 +121,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}
 	vmCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -162,6 +164,8 @@ func (v *VM) terminate() {
 	v.stopOnce.Do(func() {
 		v.stop()
 		if v.cmd.Process != nil {
+			// Kill subprocesses in the helper's process group too.
+			_ = syscall.Kill(-v.cmd.Process.Pid, syscall.SIGKILL)
 			_ = v.cmd.Process.Kill()
 		}
 	})
@@ -363,7 +367,9 @@ func (v *VM) readCompletion(ctx context.Context, prefix string) (string, error) 
 
 func makeLiveScript(req Request, base string) (string, error) {
 	var b strings.Builder
-	b.WriteString("#!/bin/sh\ncd " + shellQuote(req.WorkDir) + " || exit 111\n")
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("exec < " + shellQuote(base+".stdin") + " > " + shellQuote(base+".stdout") + " 2> " + shellQuote(base+".stderr") + "\n")
+	b.WriteString("cd " + shellQuote(req.WorkDir) + " || exit 111\n")
 	keys := make([]string, 0, len(req.Env))
 	for key, val := range req.Env {
 		if !shellVariable.MatchString(key) || strings.ContainsRune(val, 0) {
@@ -381,7 +387,7 @@ func makeLiveScript(req Request, base string) (string, error) {
 		}
 		b.WriteString(shellQuote(arg))
 	}
-	b.WriteString(" < " + shellQuote(base+".stdin") + " > " + shellQuote(base+".stdout") + " 2> " + shellQuote(base+".stderr") + "\n")
+	b.WriteString("\n")
 	return b.String(), nil
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
@@ -389,10 +395,11 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\'
 var errOutputTooLarge = errors.New("VM output exceeds output limit")
 
 func readOutputFile(name string, limit int64) ([]byte, error) {
-	f, e := os.Open(name)
+	fd, e := syscall.Open(name, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if e != nil {
 		return nil, e
 	}
+	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
 	info, e := f.Stat()
 	if e != nil {

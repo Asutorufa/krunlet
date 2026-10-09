@@ -48,7 +48,7 @@ type limitedWriter struct {
 	buf    bytes.Buffer
 	budget *outputBudget
 	mirror io.Writer
-	err error
+	err    error
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
