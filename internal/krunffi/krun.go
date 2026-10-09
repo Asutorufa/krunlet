@@ -31,6 +31,7 @@ type Config struct {
 	MemoryMiB         uint32
 	Network           bool
 	RestrictedNetwork bool
+	NetSocket         string
 	Ports             []string
 	RLimits           []string
 	Library           string
@@ -49,6 +50,7 @@ type api struct {
 	disableImplicitVsock func(uint32) int32
 	kernel               func(uint32, string, uint32, unsafe.Pointer, unsafe.Pointer) int32
 	ports                func(uint32, unsafe.Pointer) int32
+	netUnixstream        func(uint32, string, int32, unsafe.Pointer, uint32, uint32) int32
 	enter                func(uint32) int32
 }
 
@@ -95,6 +97,13 @@ func Enter(c Config) error {
 		}
 		purego.RegisterFunc(&a.kernel, symbol)
 	}
+ 	if c.RestrictedNetwork {
+		// NET=1 is not part of libkrun's default build. Never fall back
+		// to TSI when this symbol is absent.
+		sym, e := purego.Dlsym(lib, "krun_add_net_unixstream")
+		if e != nil { return fmt.Errorf("restricted gVisor networking needs libkrun built with NET=1: %w", e) }
+		purego.RegisterFunc(&a.netUnixstream, sym)
+	}
 	id := a.create()
 	if id < 0 {
 		return nativeError("krun_create_ctx", id)
@@ -129,17 +138,16 @@ func Enter(c Config) error {
 	// Explicit vsock with no TSI flags disables TSI socket hijacking. This is
 	// essential: with no explicit override, legacy libkrun enables host egress.
 	if c.RestrictedNetwork {
-		if !c.Network {
-			return fmt.Errorf("restricted networking requires Network=true")
+		if !c.Network || c.NetSocket == "" {
+			return fmt.Errorf("restricted networking requires Network=true and a gVisor socket")
 		}
-		// Explicitly enable only AF_INET/AF_INET6 TSI. AF_UNIX host
-		// impersonation would not be subject to nftables IP OUTPUT rules.
-		if err := check("krun_disable_implicit_vsock", a.disableImplicitVsock(ctx)); err != nil {
-			return err
-		}
-		if err := check("krun_add_vsock(INET TSI)", a.vsock(ctx, 1)); err != nil {
-			return err
-		}
+		// Disable *all* socket impersonation, including AF_UNIX host hijacking.
+		// The only guest egress becomes the virtio-net device below.
+		if err := check("krun_disable_implicit_vsock", a.disableImplicitVsock(ctx)); err != nil { return err }
+		if err := check("krun_add_vsock(no TSI)", a.vsock(ctx, 0)); err != nil { return err }
+		mac := [...]byte{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xef}
+		// NET_FLAG_DHCP_CLIENT = 1<<1. libkrun runs its built-in DHCP client.
+		if err := check("krun_add_net_unixstream", a.netUnixstream(ctx, c.NetSocket, -1, unsafe.Pointer(&mac[0]), 0, 2)); err != nil { return err }
 	} else if !c.Network {
 		// libkrun 1.19 requires disabling its implicit vsock before adding
 		// a custom device with no TSI features.

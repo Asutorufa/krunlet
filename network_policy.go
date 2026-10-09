@@ -24,16 +24,14 @@ type NetworkRule struct {
 	Protocol string // "", "tcp", or "udp"
 }
 
-// NetworkPolicy is enforced on the libkrun helper's host-side sockets.
-// Namespace must identify a dedicated, preconfigured Linux network namespace,
-// provisioned by the administrator with the necessary routes/NAT. Never share
-// it with unrelated workloads or give the helper network-administration rights.
+// NetworkPolicy is enforced at gVisor's TCP and UDP host-dial boundary.
+// Only IPv4 destinations are currently forwarded. Inbound connections,
+// other IP protocols, and DNS forwarding are not enabled.
 type NetworkPolicy struct {
 	Mode                 NetworkMode
 	Allow                []NetworkRule
 	Block                []NetworkRule
 	BlockPrivateNetworks bool
-	Namespace            string
 }
 
 type compiledRule struct {
@@ -47,7 +45,6 @@ type compiledNetworkPolicy struct {
 	allow        []compiledRule
 	block        []compiledRule
 	blockPrivate bool
-	namespace    string
 }
 
 func normalizeNetworkPolicy(p *NetworkPolicy) (*NetworkPolicy, error) {
@@ -70,12 +67,7 @@ func compileNetworkPolicy(p *NetworkPolicy) (*compiledNetworkPolicy, error) {
 	if p.Mode != NetworkAllowlist && p.Mode != NetworkBlocklist {
 		return nil, fmt.Errorf("network policy mode must be allowlist or blocklist")
 	}
-	if p.Namespace == "" || len(p.Namespace) > 63 ||
-		strings.Trim(p.Namespace, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") != "" ||
-		p.Namespace == "." || p.Namespace == ".." || strings.HasPrefix(p.Namespace, "-") {
-		return nil, fmt.Errorf("network namespace must be a simple name (letters, numbers, _, -, .)")
-	}
-	out := &compiledNetworkPolicy{mode: p.Mode, blockPrivate: p.BlockPrivateNetworks, namespace: p.Namespace}
+	out := &compiledNetworkPolicy{mode: p.Mode, blockPrivate: p.BlockPrivateNetworks}
 	parse := func(label string, rules []NetworkRule) ([]compiledRule, error) {
 		result := make([]compiledRule, 0, len(rules))
 		for i, r := range rules {
@@ -113,9 +105,8 @@ func compileNetworkPolicy(p *NetworkPolicy) (*compiledNetworkPolicy, error) {
 	return out, nil
 }
 
-// Allows reports the decision for a resolved destination. It is intended for
-// testing, diagnostics and audit UI. Security enforcement happens in nftables,
-// not via this method.
+// Allows reports the destination decision used by the gVisor TCP/UDP
+// forwarders BEFORE they open a host connection. DNS is never resolved here.
 func (p *NetworkPolicy) Allows(ip netip.Addr, port uint16, protocol string) (bool, error) {
 	c, err := compileNetworkPolicy(p)
 	if err != nil {

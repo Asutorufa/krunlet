@@ -37,9 +37,9 @@ type Options struct {
 	// Network opts into libkrun's TSI forwarding through the host network.
 	// False disables socket hijacking with krun_add_vsock(ctx, 0).
 	Network bool
-	// NetworkPolicy enforces host-side TSI egress IP/CIDR rules in a dedicated
-	// Linux network namespace. Requires Network=true. Without this policy,
-	// Network=true continues to allow unrestricted TSI host egress.
+	// NetworkPolicy enables a gVisor Netstack virtio-net gateway and filters
+	// outbound TCP/UDP connections before any host-side dial. It requires
+	// Network=true. Without a policy, Network=true uses unrestricted TSI.
 	NetworkPolicy *NetworkPolicy
 	// Ephemeral copies the trusted rootfs into a private temp directory for
 	// every invocation, preventing guest changes from persisting. Default true.
@@ -247,6 +247,9 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	lease, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy)
+	if err != nil { return result, fmt.Errorf("gVisor network setup: %w", err) }
+	defer lease.Close()
 	// Only the helper writes to this private status file. It distinguishes
 	// VMM startup failures from a guest process legitimately exiting 125.
 	status, err := os.CreateTemp("", "krunlet-status-*.txt")
@@ -260,7 +263,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
 		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath,
-		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil}
+		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil, NetSocket: lease.socket}
 	configFile, err := os.CreateTemp("", "krunlet-config-*.json")
 	if err != nil {
 		return result, err
@@ -281,13 +284,6 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		helperArg = "__helper"
 	}
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
-	// Install the kernel-level namespace firewall BEFORE launching the
-	// helper. If enforcement is unavailable, never run with open egress.
-	releaseNetwork, err := prepareNetwork(callCtx, r.cfg.NetworkPolicy, cmd)
-	if err != nil {
-		return result, fmt.Errorf("network policy setup: %w", err)
-	}
-	defer releaseNetwork()
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)
 	}
