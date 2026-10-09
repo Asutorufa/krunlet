@@ -198,13 +198,19 @@ type shortWriteBuffer struct {
 }
 
 func (w *shortWriteBuffer) Write(p []byte) (int, error) {
-	if len(p) > 2 { p = p[:2] }
+	if len(p) > 2 {
+		p = p[:2]
+	}
 	return w.buf.Write(p)
 }
 
 func TestWriteFullHandlesShortWrites(t *testing.T) {
 	w := &shortWriteBuffer{}
 	message := []byte("123456789abcde")
-	if err := writeFull(w, message); err != nil { t.Fatal(err) }
-	if !bytes.Equal(w.buf.Bytes(), message) { t.Fatalf("short write truncated: %q", w.buf.Bytes()) }
+	if err := writeFull(w, message); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(w.buf.Bytes(), message) {
+		t.Fatalf("short write truncated: %q", w.buf.Bytes())
+	}
 }

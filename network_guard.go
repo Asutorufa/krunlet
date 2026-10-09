@@ -230,8 +230,12 @@ func (w *guestWire) writeFrame(frame []byte) error {
 func writeFull(w io.Writer, data []byte) error {
 	for len(data) > 0 {
 		n, err := w.Write(data)
-		if err != nil { return err }
-		if n <= 0 { return io.ErrShortWrite }
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
 		data = data[n:]
 	}
 	return nil
