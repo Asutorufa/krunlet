@@ -243,7 +243,7 @@ No standalone CLI installation is necessary for Go imports. Krunlet re-executes 
 | Inbound ports | `PortMaps` | Host:guest, no implicit wildcard forwarding |
 | Guest rlimits | `RLimits` | Numeric Linux resource IDs, e.g. `7=256:256` |
 | Networking | `Network` | Disabled by default via no-TSI vsock; enabling allows host-mediated egress |
-| Restricted egress | `NetworkPolicy` | gVisor user-space virtio-net gateway, IPv4 TCP/UDP rules, Linux/macOS |
+| Restricted egress | `NetworkPolicy` | gVisor user-space virtio-net gateway, IPv4/IPv6 TCP/UDP rules, Linux/macOS |
 | Native library override | `LibraryPath` | Defaults to libkrun.so.1 / libkrun.dylib |
 | Custom guest kernel | `Kernel *KernelConfig` | Host path, format, optional initramfs and cmdline; nil uses libkrunfw |
 
@@ -306,11 +306,30 @@ Network policies work with one-shot `Runner`, reusable-rootfs `Session`,
 and long-running `NewVM`. `PortMaps` cannot be combined with strict mode.
 No `nftables`, netns, or root permissions are needed for the gateway itself.
 
+**IPv4 and IPv6 support:** The gateway handles dual-stack TCP/UDP.
+IPv4 guests are configured by DHCP; IPv6 guests receive an isolated ULA
+`fd42:6b72:756e::/64` via ICMPv6 Router Advertisements (SLAAC), with
+the link-local gateway `fe80::1`. The guest kernel needs IPv6/virtio-net,
+Neighbor Discovery and SLAAC enabled. A remote IPv6 destination is reached
+through a host `tcp6`/`udp6` dial; the host therefore needs working IPv6
+connectivity. No host interface needs that ULA prefix because connections
+are proxied rather than routed. Both address families use identical
+CIDR, port and protocol filtering.
+
+Example IPv6 allow rule:
+
+```sh
+krunlet run --rootfs ./rootfs --network \\
+  --net-mode allowlist --block-private \\
+  --allow-cidr '2606:4700:4700::1111/128,443,tcp' \\
+  -- /bin/sh -c 'curl -6 -k https://[2606:4700:4700::1111]/'
+```
+
 **Current restrictions:**
 
-- The gateway handles **IPv4 TCP/UDP** and DHCP. IPv6 rules are rejected
-  at network startup rather than silently ignored. Arbitrary IP protocols
-  are not forwarded.
+- The gateway supports **IPv4 and IPv6 TCP/UDP** and basic ICMPv6
+  router/neighbor discovery for SLAAC. Arbitrary IP protocols are not
+  forwarded or tunneled.
 - **DNS forwarding is deliberately disabled** pending an enforceable DNS
   policy. Use literal IP endpoints or trusted application-level resolution
   outside the guest. Permitting port 53 to a public resolver does not itself

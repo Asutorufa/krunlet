@@ -25,8 +25,8 @@ type NetworkRule struct {
 }
 
 // NetworkPolicy is enforced at gVisor's TCP and UDP host-dial boundary.
-// Only IPv4 destinations are currently forwarded. Inbound connections,
-// other IP protocols, and DNS forwarding are not enabled.
+// IPv4 and IPv6 TCP/UDP are supported. Inbound connections, other IP
+// protocols, and DNS forwarding are not enabled.
 type NetworkPolicy struct {
 	Mode                 NetworkMode
 	Allow                []NetworkRule
