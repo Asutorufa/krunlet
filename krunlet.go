@@ -138,7 +138,19 @@ func New(opts Options) (*Runner, error) {
 	return &Runner{cfg: opts, autoHelper: autoHelper}, nil
 }
 
+// Run executes a one-shot microVM, capturing stdout and stderr.
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
+	return r.run(ctx, req, nil, nil)
+}
+
+// RunStream executes a one-shot microVM, streaming stdout/stderr to the
+// supplied writers while also retaining the bounded output in Result.
+// A writer failure aborts the VM. Nil writers discard the streamed copy.
+func (r *Runner) RunStream(ctx context.Context, req Request, stdout, stderr io.Writer) (Result, error) {
+	return r.run(ctx, req, stdout, stderr)
+}
+
+func (r *Runner) run(ctx context.Context, req Request, stdout, stderr io.Writer) (Result, error) {
 	start := time.Now()
 	result := Result{ExitCode: -1, Files: map[string][]byte{}}
 	if len(req.Command) == 0 {
@@ -242,8 +254,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
 	cmd.Stdin = strings.NewReader(req.Stdin)
 	combined := &outputBudget{limit: r.cfg.MaxOutputBytes}
-	out := &limitedWriter{budget: combined}
-	errout := &limitedWriter{budget: combined}
+	out := &limitedWriter{budget: combined, mirror: stdout}
+	errout := &limitedWriter{budget: combined, mirror: stderr}
 	cmd.Stdout = out
 	cmd.Stderr = errout
 	err = cmd.Start()
@@ -268,6 +280,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	if result.OutputLimited {
 		return result, errors.New("guest output limit exceeded")
+	}
+	if e := out.mirrorError(); e != nil {
+		return result, fmt.Errorf("stdout stream: %w", e)
+	}
+	if e := errout.mirrorError(); e != nil {
+		return result, fmt.Errorf("stderr stream: %w", e)
 	}
 	if statusErr, readErr := os.ReadFile(status.Name()); readErr == nil && len(statusErr) > 0 {
 		return result, fmt.Errorf("libkrun helper failed: %s", strings.TrimSpace(string(statusErr)))

@@ -15,7 +15,7 @@ import (
 	"github.com/Asutorufa/krunlet/internal/krunffi"
 )
 
-const version = "0.1.0-dev"
+const version = "0.2.0-dev"
 
 type repeated []string
 

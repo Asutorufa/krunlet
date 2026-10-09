@@ -37,6 +37,7 @@ type api struct {
 	exec     func(uint32, string, unsafe.Pointer, unsafe.Pointer) int32
 	limits   func(uint32, unsafe.Pointer) int32
 	vsock    func(uint32, uint32) int32
+	disableImplicitVsock func(uint32) int32
 	ports    func(uint32, unsafe.Pointer) int32
 	enter    func(uint32) int32
 }
@@ -66,7 +67,7 @@ func Enter(c Config) error {
 		{"krun_create_ctx", &a.create}, {"krun_free_ctx", &a.free},
 		{"krun_set_vm_config", &a.vmConfig}, {"krun_set_root", &a.root},
 		{"krun_set_workdir", &a.workdir}, {"krun_set_exec", &a.exec},
-		{"krun_set_rlimits", &a.limits}, {"krun_add_vsock", &a.vsock},
+		{"krun_set_rlimits", &a.limits}, {"krun_disable_implicit_vsock", &a.disableImplicitVsock}, {"krun_add_vsock", &a.vsock},
 		{"krun_set_port_map", &a.ports}, {"krun_start_enter", &a.enter},
 	} {
 		symbol, e := purego.Dlsym(lib, sym.name)
@@ -100,6 +101,11 @@ func Enter(c Config) error {
 	// Explicit vsock with no TSI flags disables TSI socket hijacking. This is
 	// essential: with no explicit override, legacy libkrun enables host egress.
 	if !c.Network {
+		// libkrun 1.19 requires disabling its implicit vsock before adding
+		// a custom device with no TSI features.
+		if err := check("krun_disable_implicit_vsock", a.disableImplicitVsock(ctx)); err != nil {
+			return err
+		}
 		if err := check("krun_add_vsock(no TSI)", a.vsock(ctx, 0)); err != nil {
 			return err
 		}
@@ -164,7 +170,7 @@ func Available(lib string) error {
 		return e
 	}
 	defer purego.Dlclose(h)
-	for _, symbol := range []string{"krun_create_ctx", "krun_start_enter", "krun_add_vsock"} {
+	for _, symbol := range []string{"krun_create_ctx", "krun_start_enter", "krun_add_vsock", "krun_disable_implicit_vsock"} {
 		if _, e = purego.Dlsym(h, symbol); e != nil {
 			return e
 		}

@@ -11,6 +11,101 @@
 - Trusted, prepared **Linux rootfs directory**, e.g. from an image you built and verified. It must contain the invoked binaries and libraries.
 - Go 1.23+ to build from source. No C compiler or cgo required to build the Go binary.
 
+## Installing the native `libkrun` libraries
+
+**You do not put `libkrun.so` inside your Go module or inside the guest rootfs.**
+The `krunlet` helper runs on the **host** and calls `purego.Dlopen` at runtime.
+The host needs a native libkrun **1.19.x** shared library, its dependencies,
+and (where required) `libkrunfw` (the guest kernel payload).
+Compiling Krunlet with `CGO_ENABLED=0` only removes the Go/C build dependency;
+it does **not** bundle these native libraries or the firmware.
+
+### macOS (Apple Silicon, macOS 14+)
+
+Homebrew provides the libraries. The community tap used by libkrun is available
+at [libkrun/homebrew-krun](https://github.com/libkrun/homebrew-krun):
+
+```sh
+brew tap libkrun/krun
+# With Homebrew versions requiring third-party tap trust:
+brew trust libkrun/krun
+brew install libkrun libkrunfw
+
+# The exact location is shown by Homebrew, typically under /opt/homebrew/opt/:
+ls -l "$(brew --prefix libkrun)/lib/"*krun*.dylib
+krunlet doctor --lib "$(brew --prefix libkrun)/lib/libkrun.dylib"
+```
+
+When using this path from Go, set
+`Options.LibraryPath = "/opt/homebrew/opt/libkrun/lib/libkrun.dylib"`
+(adjust to your `brew --prefix libkrun`). Otherwise Krunlet attempts
+`Dlopen("libkrun.dylib")`, which must be discoverable by the system dynamic
+loader. `DYLD_LIBRARY_PATH` can affect loading on non-protected executables,
+but an explicit absolute `LibraryPath` is recommended.
+
+For macOS virtualization, the **actual signed executable** (CLI *or your Go
+application importing Krunlet*) may need the Hypervisor entitlement. An
+example is in [`docs/krunlet.entitlements`](docs/krunlet.entitlements):
+
+```sh
+codesign --force --sign - --entitlements docs/krunlet.entitlements ./krunlet
+```
+
+### Fedora Linux (x86-64 / aarch64)
+
+Use distribution packages if available, or enable the libkrun COPRs:
+
+```sh
+sudo dnf copr enable -y slp/libkrunfw
+sudo dnf copr enable -y slp/libkrun
+sudo dnf install -y libkrun libkrunfw
+ls -l /usr/lib64/libkrun.so*
+krunlet doctor
+ls -l /dev/kvm
+```
+
+Ensure the account running the helper can access `/dev/kvm` (often via the
+`kvm` group). If libkrun is installed in a custom location, inspect it using
+`ldconfig -p | grep libkrun` and pass the **full path to the versioned**
+`libkrun.so.1` via `--lib` or `Options.LibraryPath`.
+
+### Other Linux distributions / building from source
+
+Check whether your distribution provides compatible `libkrun` and `libkrunfw`
+packages. Otherwise follow the upstream installation guides:
+
+1. [libkrunfw](https://github.com/libkrun/libkrunfw) for the guest kernel.
+2. [libkrun v1.19.6](https://github.com/libkrun/libkrun/tree/v1.19.6) for the shared library (use the versioned tag, **not** the 2.x development API).
+
+For a source build after installing the documented toolchain and firmware:
+
+```sh
+git clone --branch v1.19.6 --depth 1 https://github.com/libkrun/libkrun.git
+cd libkrun
+make
+sudo make install
+sudo ldconfig  # Linux, when using a standard library path
+```
+
+The upstream GitHub release page provides source releases, **not** a universal
+prebuilt `libkrun.so` asset. Usual Linux paths are `/usr/lib64/`, `/usr/lib/`,
+`/usr/local/lib/` and `/usr/local/lib64/`; the path depends on your package
+manager. If using a custom directory, configure the **host** dynamic loader
+(e.g. `LD_LIBRARY_PATH=/path/to/libdir` or `ldconfig`) so dependent shared
+libraries such as `libkrunfw` can also be located. Passing `LibraryPath`
+changes only which libkrun binary `purego` opens.
+
+### Verify
+
+```sh
+krunlet doctor                          # resolves the system default library
+krunlet doctor --lib /custom/libkrun.so.1
+krunlet run --rootfs /path/to/rootfs -- /bin/sh -c 'echo guest-ok'
+```
+
+`doctor` is a dynamic loader/ABI check. A successful result is **not** proof
+that an actual VM boots or that host isolation is correctly configured.
+
 ## Install
 
 ```sh
@@ -35,7 +130,7 @@ krunlet run --rootfs ./rootfs --network -- /bin/sh -lc 'curl https://example.org
 
 No network is the default. `--network` enables TSI through the **host network**, not a separate routed namespace. The `--persistent` switch disables ephemeral filesystem cloning and writes **directly to the supplied rootfs**, so do not use it for untrusted work.
 
-The `run`/`exec` CLI executes one command in one new VM. VM startup costs occur per call; there is no persistent REPL or interactive agent session yet.
+The `run`/`exec` CLI executes one command in one new VM. VM startup costs occur per call; the Go library also offers `NewVM` for one running VM serving multiple commands.
 
 ## Go API
 
@@ -67,7 +162,7 @@ No standalone CLI installation is necessary for Go imports. Krunlet re-executes 
 
 | Feature | API | Notes |
 | --- | --- | --- |
-| VM isolation | libkrun KVM/HVF | One VM per Run |
+| VM isolation | libkrun KVM/HVF | One VM per `Runner.Run`; reuse via `NewVM` |
 | CPU and memory | `CPUs`, `MemoryMiB` | Configured at VM startup |
 | Timeout/cancellation | `Timeout`, context | Kills helper on expiry |
 | stdout/stderr | `Result.Stdout`, `.Stderr` | Shared total output cap; kills helper if exceeded |
@@ -87,7 +182,7 @@ No standalone CLI installation is necessary for Go imports. Krunlet re-executes 
 - `libkrun` defaults to TSI network when no conventional NIC is attached. Krunlet explicitly requests a vsock without TSI features when network is disabled, and sets an empty inbound port map. This needs runtime verification against your exact libkrun build before it can be relied upon as a security boundary.
 - libkrun 1.x virtio-fs is **not** a complete host filesystem sandbox. The helper must be confined by host OS policies to mitigate filesystem traversal and other host access. Do not run it as root.
 - Rootfs copies consume disk space proportional to the rootfs and do not yet enforce disk quotas. Refuse untrusted oversized base images; use OS quotas/cgroups in production.
-- No container image pulling, persistent multi-command VM, streaming protocol, DNS/domain allowlist, snapshot/overlay storage, structured per-syscall network policy, or remote execution in v0.1.0.
+- No container image pulling, per-host disk quotas, DNS/domain allowlist, snapshot/overlay storage, structured per-syscall network policy, or remote execution yet.
 - `Doctor` checks dynamic ABI symbol presence and `/dev/kvm`, not guest boot success.
 
 ## Development
@@ -145,3 +240,67 @@ printf 'hello' | krunlet run --rootfs ./rootfs --stdin-file - -- /bin/cat
 ```
 
 The JSON `files` map uses Go's `[]byte` JSON encoding (base64), and the helper captures stdout/stderr separately up to `--output-limit` total bytes.
+
+## Running multiple commands in one VM (Go library)
+
+`Session` shares a filesystem but restarts a fresh VM per command.
+For agents that need an actual **running** VM (no reboot between calls), use
+`NewVM`. This requires `/bin/sh` in the guest image:
+
+```go
+vm, err := krunlet.NewVM(ctx, krunlet.Options{
+    RootFS: "/path/to/rootfs", Timeout: 20*time.Second,
+    Network: false,
+})
+if err != nil { return err }
+defer vm.Close()
+
+first, err := vm.Run(ctx, krunlet.Request{
+    Command: []string{"/bin/sh", "-c", "echo one > /tmp/state"},
+})
+if err != nil { return err }
+if first.ExitCode != 0 { return fmt.Errorf("first command exited %d", first.ExitCode) }
+
+second, err := vm.Shell(ctx, "cat /tmp/state")
+if err != nil { return err }
+fmt.Println(second.Stdout) // one
+```
+
+The library uses a small POSIX shell command loop in the guest, and keeps its
+control and per-command stdout/stderr files in the **private rootfs clone**.
+Commands run **sequentially**; `VM.Run` stdout/stderr are available **after**
+the command exits. Cancelling a command or exceeding its timeout destroys
+the VM, preventing a contaminated VM from being reused. `Close` also aborts
+an in-progress command. Control files are not a security barrier against a
+malicious guest, and the shared directory requires additional host confinement.
+Do not pass secrets in `Request.Env` unless the guest is allowed to read them.
+
+### Stream output from one-shot VM executions
+
+`Runner.RunStream` sends output to Go `io.Writer` interfaces as it arrives,
+while still collecting bounded strings in `Result`:
+
+```go
+result, err := runner.RunStream(ctx, krunlet.Request{
+    Command: []string{"/bin/sh", "-c", "echo starting; sleep 1; echo finished"},
+}, os.Stdout, os.Stderr)
+```
+
+The same combined `MaxOutputBytes` limit applies, and an `io.Writer` failure
+aborts execution. Real-time streams for the long-running `VM` mode require
+a guest-side framing protocol and are not yet supported.
+
+### Isolation checklist for untrusted agents
+
+- Treat the helper **and guest** as the same host security principal.
+- Run the helper under a dedicated low-privilege UID with mount namespace
+  confinement on Linux; use system policies to limit what virtio-fs can reach.
+- Confine the **helper's** host network namespace / firewall rules; simply
+  omitting an explicit guest NIC does not disable TSI.
+- Add host-enforced filesystem quotas and process/memory limits; VM memory
+  settings and output caps do not protect host storage from guest writes.
+- Do not allow untrusted inputs to select `RootFS`, `HelperPath`, `LibraryPath`,
+  or `Persistent` mode.
+
+The implementation intentionally does **not** claim production-safe host
+confinement without those platform-specific controls.
