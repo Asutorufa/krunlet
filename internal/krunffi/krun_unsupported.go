@@ -12,7 +12,7 @@ type KernelConfig struct {
 }
 
 type Config struct {
-	Kernel *KernelConfig
+	Kernel                              *KernelConfig
 	RootFS, WorkDir, Library, ErrorPath string
 	Command, Env, Ports, RLimits        []string
 	CPUs                                uint8
