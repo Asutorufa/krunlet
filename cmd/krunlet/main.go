@@ -89,7 +89,6 @@ func run() int {
 		kernelCmdline := f.String("kernel-cmdline", "", "optional Linux kernel command line (requires --kernel)")
 		net := f.Bool("network", false, "allow guest outbound network via TSI")
 		netMode := f.String("net-mode", "", "restricted egress: allowlist or blocklist (requires --network)")
-		netNamespace := f.String("netns", "", "dedicated Linux network namespace for enforced egress")
 		blockPrivate := f.Bool("block-private", false, "reject private/local IP destinations in restricted mode")
 		persistent := f.Bool("persistent", false, "allow changes to original rootfs (unsafe)")
 		jsonOut := f.Bool("json", false, "print structured result JSON")
@@ -193,7 +192,7 @@ func run() int {
 		var networkPolicy *krunlet.NetworkPolicy
 		if *netMode != "" {
 			networkPolicy = &krunlet.NetworkPolicy{
-				Mode: krunlet.NetworkMode(*netMode), Namespace: *netNamespace, BlockPrivateNetworks: *blockPrivate,
+				Mode: krunlet.NetworkMode(*netMode), BlockPrivateNetworks: *blockPrivate,
 			}
 			for _, spec := range allowCIDRs {
 				rule, e := parseNetworkRule(spec)
@@ -211,8 +210,8 @@ func run() int {
 				}
 				networkPolicy.Block = append(networkPolicy.Block, rule)
 			}
-		} else if *netNamespace != "" || *blockPrivate || len(allowCIDRs) > 0 || len(blockCIDRs) > 0 {
-			fmt.Fprintln(os.Stderr, "--netns, --block-private, --allow-cidr, --block-cidr require --net-mode")
+		} else if *blockPrivate || len(allowCIDRs) > 0 || len(blockCIDRs) > 0 {
+			fmt.Fprintln(os.Stderr, "--block-private, --allow-cidr, --block-cidr require --net-mode")
 			return 2
 		}
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),

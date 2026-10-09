@@ -243,41 +243,37 @@ No standalone CLI installation is necessary for Go imports. Krunlet re-executes 
 | Inbound ports | `PortMaps` | Host:guest, no implicit wildcard forwarding |
 | Guest rlimits | `RLimits` | Numeric Linux resource IDs, e.g. `7=256:256` |
 | Networking | `Network` | Disabled by default via no-TSI vsock; enabling allows host-mediated egress |
-| Restricted egress | `NetworkPolicy` | Linux dedicated netns + nftables IP/CIDR and port allow/block rules |
+| Restricted egress | `NetworkPolicy` | gVisor user-space virtio-net gateway, IPv4/IPv6 TCP/UDP rules, Linux/macOS |
 | Native library override | `LibraryPath` | Defaults to libkrun.so.1 / libkrun.dylib |
 | Custom guest kernel | `Kernel *KernelConfig` | Host path, format, optional initramfs and cmdline; nil uses libkrunfw |
 
 
-## Restricted egress: IP/CIDR allowlists and blocklists (Linux)
+## Restricted outbound networking with gVisor (Linux and macOS)
 
-Krunlet supports IP/CIDR + TCP/UDP port policies for outgoing **TSI**
-connections. Enforcement is performed by **nftables in a dedicated Linux
-network namespace around the libkrun helper**. This is *not* a Go-side
-filter, guest-side iptables, or a DNS-only filter. It applies to the helper's
-host-side sockets. If the namespace, `ip`, `nft`, or rule installation is
-unavailable, launching the VM **fails closed**.
+By default Krunlet disables networking. If `Network=true` without a
+`NetworkPolicy`, libkrun uses unrestricted host-mediated TSI networking
+(**not suitable for untrusted agents**).
 
-**Host setup:** An administrator must supply a dedicated, existing Linux
-network namespace with its own route/NAT to reach approved external IPs.
-Krunlet does **not** provision virtual Ethernet or host NAT, and never
-writes rules to the host's initial network namespace. The namespace must
-not be shared with unrelated workloads and must not be modified by the
-guest or helper. Both `ip netns exec` and installing nftables rules require
-appropriate host privileges; run the VM helper with the minimum permissions
-necessary, and do not grant it `CAP_NET_ADMIN`. This backend is Linux-only:
-macOS reports unsupported rather than ignoring the policy.
+With `NetworkPolicy`, Krunlet instead creates an isolated **gVisor Netstack
+TCP/UDP gateway** inside the parent Go process and attaches the guest using
+a QEMU-framed Unix stream and libkrun's `krun_add_net_unixstream` API.
+Each allowed destination is checked **before** Netstack's TCP/UDP forwarder
+opens any host socket. Unlisted traffic is dropped in allowlist mode; explicit
+block rules take precedence over allow rules. Restricted mode disables
+libkrun TSI, including its host AF_UNIX socket impersonation feature.
+
+**Extra native requirement:** libkrun 1.19.x must be built with `NET=1`.
+Normal libkrun builds do not necessarily contain `krun_add_net_unixstream`.
+Krunlet fails closed if that symbol is missing:
 
 ```sh
-# Provision a separate namespace (requires root or appropriate capabilities).
-sudo ip netns add krunlet-agent
-# IMPORTANT: Configure a veth pair, addressing, routes, and scoped NAT
-# before use. A newly created namespace has no internet route.
-sudo ip netns exec krunlet-agent ip address show
-sudo ip netns exec krunlet-agent ip route show
-# nftables and iproute2 must be installed and usable by the supervisor.
+git clone --depth 1 --branch v1.19.6 https://github.com/libkrun/libkrun.git
+cd libkrun
+make NET=1
+sudo make install
 ```
 
-Go library example (IP allowlist, default-deny):
+Go usage:
 
 ```go
 runner, err := krunlet.New(krunlet.Options{
@@ -285,14 +281,12 @@ runner, err := krunlet.New(krunlet.Options{
     Network: true,
     NetworkPolicy: &krunlet.NetworkPolicy{
         Mode: krunlet.NetworkAllowlist,
-        Namespace: "krunlet-agent",
         BlockPrivateNetworks: true,
         Allow: []krunlet.NetworkRule{
             {CIDR: "1.1.1.1/32", Port: 443, Protocol: "tcp"},
-            {CIDR: "2606:4700:4700::1111/128", Port: 53, Protocol: "udp"},
         },
         Block: []krunlet.NetworkRule{
-            {CIDR: "1.1.1.2/32"}, // explicit DENY wins over ALLOW
+            {CIDR: "1.1.1.2/32"},
         },
     },
 })
@@ -302,40 +296,56 @@ CLI equivalent:
 
 ```sh
 krunlet run --rootfs ./rootfs --network \
-  --net-mode allowlist --netns krunlet-agent --block-private \
-  --allow-cidr 1.1.1.1,443,tcp \
-  --allow-cidr '2606:4700:4700::1111,53,udp' \
-  --block-cidr 1.1.1.2 \
-  -- /bin/sh -c 'echo restricted network'
+  --net-mode allowlist --block-private \
+  --allow-cidr 1.1.1.1,443,tcp --block-cidr 1.1.1.2 \
+  -- /bin/sh -c 'echo policy-enabled'
 ```
 
-`--allow-cidr` and `--block-cidr` accept `IP_OR_CIDR[,PORT[,tcp|udp]]`.
-A missing protocol matches both TCP and UDP; a missing port matches all
-ports of the selected transport. IPv4 and IPv6 are both covered. An empty
-allowlist denies all outgoing IPv4/IPv6 traffic. A blocklist accepts by
-default, except for explicit deny rules and optionally blocked private/local
-IP ranges. The same `NetworkPolicy` works with `Runner`, `Session` and
-`NewVM`. Inbound `PortMaps` are prohibited with restricted egress.
+Rules accept `IP_OR_CIDR[,PORT[,tcp|udp]]` with port and protocol optional.
+Network policies work with one-shot `Runner`, reusable-rootfs `Session`,
+and long-running `NewVM`. `PortMaps` cannot be combined with strict mode.
+No `nftables`, netns, or root permissions are needed for the gateway itself.
 
-**Limits and threat model:**
+**IPv4 and IPv6 support:** The gateway handles dual-stack TCP/UDP.
+IPv4 guests are configured by DHCP; IPv6 guests receive an isolated ULA
+`fd42:6b72:756e::/64` via ICMPv6 Router Advertisements (SLAAC), with
+the link-local gateway `fe80::1`. The guest kernel needs IPv6/virtio-net,
+Neighbor Discovery and SLAAC enabled. A remote IPv6 destination is reached
+through a host `tcp6`/`udp6` dial; the host therefore needs working IPv6
+connectivity. No host interface needs that ULA prefix because connections
+are proxied rather than routed. Both address families use identical
+CIDR, port and protocol filtering.
 
-- Domain-name rules are **not implemented**. Resolve trusted addresses and
-  list them explicitly; DNS and a domain name alone do not prove endpoint
-  identity. In allowlist mode permit the DNS server separately if needed.
-- Policies constrain destinations, not application payloads; an allowed IP
-  may host multiple virtual services. DNS rebinding and provider IP changes
-  require operator-maintained rules. UDP is covered by the explicit rules,
-  but the guest may be limited by the TSI kernel implementation.
-- The supplied namespace and its network connectivity are owned by an
-  administrator. Host network rules are installed before each helper
-  starts and removed after it exits. Keep namespace provisioning trusted;
-  a privileged/compromised helper could reconfigure its own firewall.
-- This does **not** replace host filesystem confinement, an unprivileged
-  helper, rootfs trust, or host resource quotas. The host must prevent
-  network capabilities and access to host services through other paths.
-- Unit tests check CIDR parsing, rule precedence and generated nftables
-  policy. Real firewall execution and guest egress behavior require a
-  privileged Linux/KVM integration environment.
+Example IPv6 allow rule, with curl's `--resolve` to preserve TLS
+verification without requiring guest DNS:
+
+```sh
+krunlet run --rootfs ./rootfs --network \
+  --net-mode allowlist --block-private \
+  --allow-cidr '2606:4700:4700::1111/128,443,tcp' \
+  -- /bin/sh -c 'curl -6 --resolve "one.one.one.one:443:[2606:4700:4700::1111]" https://one.one.one.one/'
+```
+
+**Current restrictions:**
+
+- The gateway supports **IPv4 and IPv6 TCP/UDP** and basic ICMPv6
+  router/neighbor discovery for SLAAC. Arbitrary IP protocols are not
+  forwarded or tunneled.
+- **DNS forwarding is deliberately disabled** pending an enforceable DNS
+  policy. Use literal IP endpoints or trusted application-level resolution
+  outside the guest. Permitting port 53 to a public resolver does not itself
+  enable DNS inside this guest; the gateway is not a generic NAT router.
+- The guest must include virtio-net support; libkrun's built-in guest DHCP
+  client is requested. Custom kernels must provide the required drivers.
+- Local host and guest files still require host OS confinement. gVisor
+  controls the intended TCP/UDP forwarding path; this is **not** a claim
+  of complete security isolation of libkrun or virtio-fs.
+- This backend depends on `github.com/containers/gvisor-tap-vsock`
+  **v0.8.0** (Go 1.22 compatible), using its TAP and DHCP components with
+  Krunlet-controlled outbound forwarders. Do not replace it with unmodified
+  gvproxy, whose default forwarders directly call host `net.Dial`.
+- Unit tests cover rule validation and gateway lifecycle. **Actual guest
+  boot and egress policy bypass tests require a libkrun NET=1 host**.
 
 ## Isolation and limitations
 
