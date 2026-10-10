@@ -30,6 +30,31 @@ umask 077
 
 curl --fail --location --retry 3 "$base/$asset" -o "$tmp/$asset"
 curl --fail --location --retry 3 "$base/checksums.txt" -o "$tmp/checksums.txt"
+curl --fail --location --retry 3 "$base/checksums.sig" -o "$tmp/checksums.sig"
+
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "Cannot verify Krunlet Release signature: openssl command missing" >&2
+  exit 1
+fi
+# The signing public key is pinned here, not downloaded from the Release.
+cat > "$tmp/release-public.pem" <<'KRUNLET_RELEASE_PUBKEY'
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAj8lwYTDpz4v9g9Lw+By+
+kxpQ/wJFm4Oj4uw7iN9/7gAq9iujFw2ComK+kgxw+zWmKD52GTfx7CIuKKT+o20g
+zNQFX4wg4T1pdoP0l4M7dNy0GBh1TOaaXCk5PZOeITwCTqScKZq5biknoVNm5Awb
+dDtTm1CL+r+2mOHXHZ6i1R8jmOBl0Xmh9nmH28SuwGz1SAjh6EsfXkKqwG3m2wAQ
+uHpr5pr6ZSaJ2etmuMTMr6QBQ3z50cvyUjHTx1vSbhL8PlE71FmRB/X/qp42II8v
+m0X0bU/EIgURSNpkfk25Z1+Mt6t8ZojBz0MWaw5dcm7ijFCwxVRcnLp2T5JxXZVm
+2fdV0BNbKTGyCtauDfQc4BksL47hWZ3nQ7ZJLxKMh8Jvq1HUM/kQmxlhM+j4Gw6M
+afieUEHN9XQjSP3XDbC6bMDgKrJN/ZSEICO0IakV6TxJ3w1SzWP2TOn2EOCEi2ju
+AgKGV+EENHftotH4ruEBzDXO+amCkRNfWwf5mOLV8grTAgMBAAE=
+-----END PUBLIC KEY-----
+KRUNLET_RELEASE_PUBKEY
+if ! openssl dgst -sha256 -verify "$tmp/release-public.pem" \
+  -signature "$tmp/checksums.sig" "$tmp/checksums.txt"; then
+  echo "Krunlet Release manifest signature INVALID: refusing installation" >&2
+  exit 1
+fi
 
 (
   cd "$tmp"

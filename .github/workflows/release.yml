@@ -290,7 +290,11 @@ jobs:
           cp dist/krunlet-* release/
           cp dist/native-manifest-* release/
           cp install.sh release/install.sh
-          (cd release && sha256sum krunlet-* native-manifest-* install.sh | sort -k2) > release/checksums.txt
+          cp cmd/krunlet/legal/Apache-2.0.txt release/
+          cp cmd/krunlet/legal/LGPL-2.1-only.txt release/
+          cp cmd/krunlet/legal/GPL-2.0-only.txt release/
+          cp cmd/krunlet/legal/SOURCES.md release/NATIVE-SOURCES.md
+          (cd release && sha256sum krunlet-* native-manifest-* install.sh *.txt NATIVE-SOURCES.md | sort -k2) > release/checksums.txt
 
           {
             echo "## Changes"
@@ -319,9 +323,28 @@ jobs:
               echo "- $(basename "$manifest")"
               cat "$manifest"
             done
-            echo '- Verify asset integrity using checksums.txt (SHA-256).'
+            echo '- Verify the release signature (checksums.sig) using the pinned public key before checking SHA-256.'
             echo '- Security isolation is experimental and depends on host-level virtualization, process and service cgroups.'
           } > release-notes.md
+
+      - name: Sign checksum manifest (pinned public key)
+        if: steps.gate.outputs.skip != 'true'
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.KRUNLET_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::KRUNLET_RELEASE_SIGNING_KEY secret is required; do not publish unsigned releases"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release-private.pem"
+          trap 'rm -f "$RUNNER_TEMP/release-private.pem"' EXIT
+          openssl pkey -in "$RUNNER_TEMP/release-private.pem" -pubout -out "$RUNNER_TEMP/release-public.pem"
+          cmp docs/release-signing-public.pem "$RUNNER_TEMP/release-public.pem"
+          openssl dgst -sha256 -sign "$RUNNER_TEMP/release-private.pem" -out release/checksums.sig release/checksums.txt
+          openssl dgst -sha256 -verify docs/release-signing-public.pem -signature release/checksums.sig release/checksums.txt
 
       - name: Update rolling main tag
         if: steps.gate.outputs.skip != 'true' && github.event_name == 'workflow_run'

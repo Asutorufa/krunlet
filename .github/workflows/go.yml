@@ -18,6 +18,22 @@ jobs:
           cache: false
       - name: Fetch dependencies
         run: go mod download
+      - name: Signing primitive must reject modified manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/key.pem" 2>/dev/null
+          openssl pkey -in "$work/key.pem" -pubout -out "$work/pub.pem"
+          printf 'safe=1\n' > "$work/checksums.txt"
+          openssl dgst -sha256 -sign "$work/key.pem" -out "$work/checksums.sig" "$work/checksums.txt"
+          openssl dgst -sha256 -verify "$work/pub.pem" -signature "$work/checksums.sig" "$work/checksums.txt"
+          printf 'safe=0\n' > "$work/checksums.txt"
+          if openssl dgst -sha256 -verify "$work/pub.pem" -signature "$work/checksums.sig" "$work/checksums.txt"; then
+            echo "::error::Tampered signed manifest was accepted"
+            exit 1
+          fi
       - name: Format check
         run: |
           files=$(gofmt -l $(git ls-files '*.go'))
