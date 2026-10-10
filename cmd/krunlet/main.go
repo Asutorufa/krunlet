@@ -99,6 +99,10 @@ func run() int {
 		blockPrivate := f.Bool("block-private", false, "reject private/local IP destinations in restricted mode")
 		persistent := f.Bool("persistent", false, "allow changes to original rootfs (unsafe)")
 		maxConcurrent := f.Int("max-concurrent-vms", 0, "per-Runner concurrent VM limit (default min(4,NumCPU/2))")
+		processMax := f.Int("process-max-vms", 0, "global VM limit shared by every Runner in this Go process")
+		cgroupParent := f.String("cgroup-parent", "", "administrator-delegated cgroup v2 parent (Linux)")
+		cgroupMemory := f.Int64("cgroup-memory-max-bytes", 0, "host helper cgroup memory.max, 0 uses guest memory plus overhead")
+		cgroupPids := f.Int64("cgroup-pids-max", 0, "host helper cgroup pids.max, 0 defaults to 128")
 		failFast := f.Bool("fail-fast", false, "return ErrTooManyVMs instead of waiting")
 		maxRootFS := f.Int64("max-rootfs-bytes", 1<<30, "logical bytes allowed in staged rootfs")
 
@@ -228,11 +232,26 @@ func run() int {
 		if *persistent {
 			fmt.Fprintln(os.Stderr, "WARNING: --persistent writes directly into the trusted host rootfs; this is not safe for untrusted commands")
 		}
+		if *processMax != 0 {
+			if e:=krunlet.ConfigureProcessVMLimit(*processMax);e!=nil {
+				fmt.Fprintln(os.Stderr,"--process-max-vms:",e)
+				return 2
+			}
+		}
+		if *cgroupParent == "" && (*cgroupMemory != 0 || *cgroupPids != 0) {
+			fmt.Fprintln(os.Stderr,"cgroup memory/pids limits require --cgroup-parent")
+			return 2
+		}
+		var cg *krunlet.CgroupV2
+		if *cgroupParent!="" {
+			cg=&krunlet.CgroupV2{Parent:*cgroupParent,MemoryMaxBytes:*cgroupMemory,PidsMax:*cgroupPids}
+		}
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
 			Kernel: customKernel, NetworkPolicy: networkPolicy,
 			MaxConcurrentVMs: *maxConcurrent, FailFast: *failFast, MaxRootFSBytes: *maxRootFS,
+			CgroupV2: cg,
 			Yuhaiin: func() *krunlet.YuhaiinConfig {
 				if *yuhaiin == "" {
 					return nil

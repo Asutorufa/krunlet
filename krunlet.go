@@ -66,6 +66,8 @@ type Options struct {
 	// OnStats receives one snapshot for each completed or failed run.
 	// It is invoked after resource cleanup without holding Runner locks.
 	OnStats func(Stats)
+	// CgroupV2 constrains the host helper process tree on Linux.
+	CgroupV2 *CgroupV2
 }
 
 type Request struct {
@@ -162,6 +164,7 @@ func New(opts Options) (*Runner, error) {
 	if opts.CPUs > 64 || opts.MemoryMiB < 128 || opts.MemoryMiB > 65536 {
 		return nil, errors.New("CPU or memory limit out of range")
 	}
+	if err := validateCgroupConfig(opts.CgroupV2); err != nil {return nil,err}
 	if opts.Timeout < 0 || opts.MaxOutputBytes < 0 || opts.MaxFileBytes < 0 || opts.MaxRootFSBytes < 0 || opts.MaxConcurrentVMs < 0 {
 		return nil, errors.New("limits cannot be negative")
 	}
@@ -239,10 +242,11 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	runID := newRunID()
 	result = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
 	var helperState *os.ProcessState
+	var cgroupPeak float64
 	defer func() {
 		if cb := r.cfg.OnStats; cb != nil {
-			cb(Stats{RunID: runID, ReadyMillis: -1, DurationMillis: time.Since(start).Milliseconds(),
-				ExitCode: result.ExitCode, PeakMemoryMiB: helperPeakMemory(helperState),
+			cb(Stats{RunID: runID, StartupReadyMillis: -1, RunElapsedMillis: time.Since(start).Milliseconds(),
+				ExitCode: result.ExitCode, HelperPeakRSSMiB: helperPeakMemory(helperState), CgroupPeakMemoryMiB: cgroupPeak,
 				NetworkPolicy: r.cfg.NetworkPolicy != nil, TimedOut: result.TimedOut})
 		}
 	}()
@@ -395,8 +399,12 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		// Explicit HelperPath keeps compatibility with the standalone CLI.
 		helperArg = "__helper"
 	}
+	group, err := prepareVMCgroup(r.cfg.CgroupV2, r.cfg.MemoryMiB)
+	if err != nil { return result, fmt.Errorf("prepare helper cgroup: %w",err) }
+	defer func(){if group != nil {_=group.close()}}()
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
 	supervisor := configureHelper(cmd)
+	if err = group.attach(cmd);err != nil {return result,err}
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)
 	}
@@ -417,6 +425,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	// Reap descendant processes even if the helper exited successfully.
 	supervisor.finish()
 	helperState = cmd.ProcessState
+	cgroupPeak = group.peakMiB()
 	result.Duration = time.Since(start)
 	result.Stdout = out.String()
 	result.Stderr = errout.String()

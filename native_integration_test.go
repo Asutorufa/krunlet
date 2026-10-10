@@ -19,7 +19,7 @@ func integrationRootFS(t *testing.T) string {
 	t.Helper()
 	root := os.Getenv("KRUNLET_TEST_ROOTFS")
 	if root == "" {
-		t.Skip("set KRUNLET_TEST_ROOTFS to a trusted Linux rootfs")
+		t.Fatal("KRUNLET_TEST_ROOTFS is required for mandatory native integration tests")
 	}
 	return root
 }
@@ -53,13 +53,10 @@ func TestNativeVMTimeoutReapsHelper(t *testing.T) {
 }
 
 func TestNative32RunsBounded(t *testing.T) {
-	if os.Getenv("KRUNLET_STRESS_32") != "1" {
-		t.Skip("set KRUNLET_STRESS_32=1 to enable full VM stress")
-	}
 	root := integrationRootFS(t)
 	scratch := t.TempDir()
 	t.Setenv("TMPDIR", scratch)
-	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, MaxConcurrentVMs: 4})
+	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, MaxConcurrentVMs: 4, CgroupV2: &CgroupV2{Parent: os.Getenv("KRUNLET_CGROUP_PARENT")}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,7 +27,7 @@ func TestStatsCallbackOneShot(t *testing.T) {
 	if result.RunID == "" || len(received) != 1 || received[0].RunID != result.RunID {
 		t.Fatalf("run ID not linked between result and stats: %+v, %+v", result, received)
 	}
-	if received[0].ExitCode != 0 || received[0].ReadyMillis != -1 || received[0].DurationMillis < 0 {
+	if received[0].ExitCode != 0 || received[0].StartupReadyMillis != -1 || received[0].RunElapsedMillis < 0 {
 		t.Fatalf("unexpected stats: %+v", received[0])
 	}
 }
@@ -54,7 +54,7 @@ func TestPersistentVMStatsReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(received) != 1 || received[0].RunID != res.RunID || received[0].ReadyMillis < 0 {
+	if len(received) != 1 || received[0].RunID != res.RunID || received[0].StartupReadyMillis < 0 {
 		t.Fatalf("missing VM readiness stats: %+v", received)
 	}
 }

@@ -6,7 +6,22 @@ on:
 permissions:
   contents: write
 jobs:
+  native-gate:
+    runs-on: [self-hosted, linux, kvm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Pin native ABI and mandatory KVM tests
+        run: |
+          test -r /dev/kvm
+          test "$(pkg-config --modversion libkrun)" = "1.19.6"
+          test -d "${KRUNLET_TEST_ROOTFS:?missing trusted test rootfs}"
+          test -d "${KRUNLET_CGROUP_PARENT:?missing delegated cgroup v2 parent}"
+          CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
   build:
+    needs: native-gate
     strategy:
       fail-fast: false
       matrix:
@@ -56,7 +71,7 @@ jobs:
             fi
             echo
             echo '## Native runtime requirements'
-            echo '- libkrun **1.19.x** (NOT libkrun 2.x).'
+            echo '- Required native libkrun **v1.19.6** (NOT libkrun 2.x). Verified against this exact version by native-gate.'
             echo '- libkrunfw required unless a custom trusted kernel is selected.'
             echo '- For gVisor virtio-net or yuhaiin ingress: build libkrun with **NET=1**.'
             echo '- Verify the host using `krunlet doctor --rootfs /trusted/rootfs` and check the `native.symbols` JSON.'

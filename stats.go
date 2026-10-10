@@ -8,16 +8,19 @@ import (
 	"time"
 )
 
-// Stats describes an individual VM command. PeakMemoryMiB is the *host
-// helper's* max resident set size from wait4/Getrusage, NOT a measure of
-// guest allocated RAM. ReadyMillis is -1 when the one-shot helper has no
-// explicit guest-ready frame. No Prometheus dependency is required.
+// Stats records run timing and host resource use. StartupReadyMillis is
+// helper launch to guest-ready for persistent VMs; -1 means unavailable
+// (one-shot execution currently has no independent ready event).
+// RunElapsedMillis includes quota admission, staging, command execution,
+// and cleanup. HelperPeakRSSMiB is the HOST helper ru_maxrss, not guest RAM.
 type Stats struct {
 	RunID          string
-	ReadyMillis    int64
-	DurationMillis int64
-	ExitCode       int
-	PeakMemoryMiB  float64
+	StartupReadyMillis int64
+	RunElapsedMillis int64
+	ExitCode int
+	HelperPeakRSSMiB float64
+	// CgroupPeakMemoryMiB is memory.peak for helper and descendants on Linux.
+	CgroupPeakMemoryMiB float64
 	NetworkPolicy  bool
 	TimedOut       bool
 }

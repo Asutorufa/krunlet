@@ -47,6 +47,7 @@ type VM struct {
 	closed         bool
 	supervisor     *helperSupervisor
 	quotaRunner    *Runner
+	cgroup         *cgroupScope
 	readyMillis    int64
 	waitDone       chan struct{}
 	waitErr        error
@@ -142,9 +143,13 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	if !sess.runner.autoHelper {
 		helperArg = "__helper"
 	}
+	group, err := prepareVMCgroup(cfg.CgroupV2, cfg.MemoryMiB)
+	if err != nil {return nil,fmt.Errorf("prepare helper cgroup: %w",err)}
+	defer func(){if err!=nil && group!=nil {_=group.close()}}()
 	vmCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
 	supervisor := configureHelper(cmd)
+	if err = group.attach(cmd); err != nil {cancel();return nil,err}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -165,7 +170,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
-		supervisor: supervisor, quotaRunner: sess.runner, waitDone: make(chan struct{})}
+		supervisor: supervisor, quotaRunner: sess.runner, cgroup: group, waitDone: make(chan struct{})}
 	startBoot := time.Now()
 	if err = supervisor.start(); err != nil {
 		cancel()
@@ -257,8 +262,8 @@ func (v *VM) Run(ctx context.Context, req Request) (res Result, runErr error) {
 		}
 		v.mu.Unlock()
 		if callback != nil {
-			callback(Stats{RunID: runID, ReadyMillis: v.readyMillis, DurationMillis: time.Since(start).Milliseconds(),
-				ExitCode: res.ExitCode, PeakMemoryMiB: 0, NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
+			callback(Stats{RunID: runID, StartupReadyMillis: v.readyMillis, RunElapsedMillis: time.Since(start).Milliseconds(),
+				ExitCode: res.ExitCode, HelperPeakRSSMiB: 0, NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
 		}
 	}()
 	res = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
@@ -490,6 +495,8 @@ func (v *VM) Close() error {
 	v.closed = true
 	_ = v.stdin.Close()
 	<-v.waitDone
+	var cgroupErr error
+	if v.cgroup != nil {cgroupErr=v.cgroup.close();v.cgroup=nil}
 	if v.networkCleanup != nil {
 		v.networkCleanup.Close()
 		v.networkCleanup = nil
@@ -502,9 +509,8 @@ func (v *VM) Close() error {
 		v.quotaRunner.release()
 		v.quotaRunner = nil
 	}
-	if err != nil {
-		return err
-	}
+	if err != nil {return err}
+	if cgroupErr != nil {return cgroupErr}
 	// Signal-terminated VMs are the expected close path.
 	return nil
 }

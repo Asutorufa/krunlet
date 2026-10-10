@@ -83,7 +83,8 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   vm-integration:
-    if: github.event_name == 'workflow_dispatch'
+    # Deliberately required on every push/PR and NOT skippable. No matching
+    # trusted KVM runner means the check stays queued and release is blocked.
     runs-on: [self-hosted, linux, kvm]
     steps:
       - uses: actions/checkout@v4
@@ -94,9 +95,10 @@ jobs:
         run: |
           test -r /dev/kvm
           test -d "${KRUNLET_TEST_ROOTFS:?set KRUNLET_TEST_ROOTFS on the self-hosted runner}"
+          test -d "${KRUNLET_CGROUP_PARENT:?set an administrator-delegated cgroup v2 parent on the runner}"
+          test -e "$KRUNLET_CGROUP_PARENT/cgroup.controllers"
+          test "$(pkg-config --modversion libkrun)" = "1.19.6"
       - name: Real VM doctor
         run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
-      - name: Real VM integration tests (including 32-run stress)
-        env:
-          KRUNLET_STRESS_32: '1'
+      - name: Mandatory real VM integration (32 runs, cgroup, no residue)
         run: CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...

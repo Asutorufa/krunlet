@@ -191,3 +191,25 @@ func TestTimedOutWhileWaitingForVMQuota(t *testing.T) {
 		t.Fatalf("queue deadline produced empty duration: %+v", res)
 	}
 }
+
+func TestProcessWideVMAdmissionAcrossTenRunners(t *testing.T) {
+	// Global quota is shared even when callers instantiate ten Runners.
+	globalLimit := cap(processVMAdmission.permits)
+	instances := make([]*Runner,10)
+	for i := range instances {
+		r,err:=New(Options{RootFS:t.TempDir(),MaxConcurrentVMs:10,FailFast:true})
+		if err!=nil {t.Fatal(err)}
+		instances[i]=r
+	}
+	for i:=0;i<globalLimit;i++ {
+		if err:=instances[i%len(instances)].acquire(context.Background());err!=nil {t.Fatal(err)}
+	}
+	if err:=instances[9].acquire(context.Background());!errors.Is(err,ErrTooManyVMs){
+		t.Fatalf("global quota not enforced across Runner instances: %v",err)
+	}
+	for i:=0;i<globalLimit;i++ {instances[i%len(instances)].release()}
+	if err:=instances[9].acquire(context.Background());err!=nil{t.Fatalf("global permit leak: %v",err)}
+	instances[9].release()
+	if err:=ConfigureProcessVMLimit(0);err==nil {t.Fatal("accepted zero global capacity")}
+	if err:=ConfigureProcessVMLimit(globalLimit+1);err==nil {t.Fatal("reconfigured live global semaphore")}
+}
