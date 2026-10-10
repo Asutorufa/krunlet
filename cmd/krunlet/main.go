@@ -16,7 +16,8 @@ import (
 	"github.com/Asutorufa/krunlet/internal/krunffi"
 )
 
-const version = "0.2.0-dev"
+// version is stamped by the prebuilt release workflow using -ldflags -X.
+var version = "0.2.0-dev"
 
 type repeated []string
 
