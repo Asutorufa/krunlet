@@ -128,6 +128,8 @@ func TestStaleRootOnlyDeletesUnlockedSignedDirectories(t *testing.T) {
 func TestConcurrent32NoTemporaryRootsLeft(t *testing.T) {
 	root := t.TempDir()
 	helper := filepath.Join(t.TempDir(), "helper")
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nprintf 'ready\n'\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -151,5 +153,14 @@ func TestConcurrent32NoTemporaryRootsLeft(t *testing.T) {
 	close(errs)
 	for e := range errs {
 		t.Error(e)
+	}
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "krunlet-") {
+			t.Errorf("leftover temporary resource after 32 runs: %s", entry.Name())
+		}
 	}
 }
