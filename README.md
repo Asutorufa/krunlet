@@ -11,14 +11,51 @@
 - Trusted, prepared **Linux rootfs directory**, e.g. from an image you built and verified. It must contain the invoked binaries and libraries.
 - Go 1.23+ to build from source. No C compiler or cgo required to build the Go binary.
 
+## Embedded native CLI releases
+
+Official Release binaries include **libkrun 1.19.6** built with `NET=1`
+and the matching `libkrunfw` guest kernel as Go `embed` assets. No
+system-wide native libkrun installation is needed for these binaries.
+On first use, Krunlet extracts the platform libraries into a user-private,
+SHA-256-addressed cache at `os.UserCacheDir()/krunlet/native`, validates
+the cached bytes before loading, and uses an absolute `LibraryPath`.
+The cache persists deliberately across runs and should be cleared when
+removing Krunlet. The dynamic loader still requires compatible host OS
+libraries; Linux needs KVM access and macOS needs Hypervisor.framework.
+Krunlet **does not** include a guest rootfs.
+
+`--lib` and `Options.LibraryPath` always take precedence over the embedded
+bundle. Regular `go install`, `go build`, and applications importing the Go
+module still use the system-installed libkrun unless explicitly built with
+native assets staged into `internal/nativebundle/assets`. Release CI does
+this per platform and verifies `doctor` loads the bundled ABI, firmware and
+`NET=1` symbol. To reproduce, use the native dependency setup in
+`.github/workflows/release.yml`, stage the corresponding two files in the
+assets directory, and rebuild.
+
+The Linux builds link against the system C runtime and may not work on
+older distributions with incompatible glibc or other native libraries.
+macOS dylibs and executables are ad-hoc signed with the Hypervisor
+entitlement, not Developer ID signed or notarized. For wider public macOS
+distribution, replace ad-hoc signing with appropriate Developer ID signing,
+hardened-runtime validation, and notarization. Do not silently disable
+library validation.
+
+**Redistribution:** libkrun is Apache-2.0; libkrunfw contains Linux kernel
+GPL-2.0 and LGPL-2.1 material. See upstream corresponding sources at
+[libkrun v1.19.6](https://github.com/libkrun/libkrun/tree/v1.19.6)
+and [libkrunfw](https://github.com/libkrun/libkrunfw).
+Redistributors must provide the corresponding source and applicable
+license notices/offer as required by those licenses.
+
 ## Installing the native `libkrun` libraries
 
-**You do not put `libkrun.so` inside your Go module or inside the guest rootfs.**
+**For normal Go builds, do not put `libkrun.so` in the guest rootfs.**
 The `krunlet` helper runs on the **host** and calls `purego.Dlopen` at runtime.
 The host needs a native libkrun **1.19.6** shared library, its dependencies,
 and, for the default kernel, `libkrunfw` (the guest kernel payload).
 Compiling Krunlet with `CGO_ENABLED=0` only removes the Go/C build dependency;
-it does **not** bundle these native libraries or the firmware.
+normal local builds do **not** bundle native libraries or firmware (official Release assets do).
 
 ### macOS (Apple Silicon, macOS 14+)
 
@@ -492,7 +529,7 @@ GitHub branch rules must explicitly require this job; see
 
 ### Prebuilt CLI releases
 
-Krunlet publishes **prebuilt, CGO-free Go CLI binaries** for Linux
+Krunlet publishes **single-file prebuilt, CGO-free Go CLI binaries with embedded native libraries** for Linux
 (amd64/arm64) and macOS Apple Silicon (arm64), as well as a SHA-256
 manifest and an optional CLI-only installer.
 
@@ -522,12 +559,10 @@ then validate the specific binary with `sha256sum -c` (Linux) or
 `krunlet-linux-amd64`, `krunlet-linux-arm64` and
 `krunlet-darwin-arm64`.
 
-**Important:** these binaries embed only the Go CLI. **They do not bundle
-libkrun, libkrunfw or a guest rootfs.** Running a VM still requires the
-compatible native libkrun **1.19.6** installation, libkrunfw (unless a
-custom kernel is used), and `NET=1` when using gVisor/virtio-net or
-yuhaiin inbound. Run `krunlet doctor --rootfs /trusted/rootfs` on
-the target host to verify the native runtime.
+**Important:** Release binaries embed libkrun 1.19.6 with `NET=1` and libkrunfw,
+but **not a Linux guest rootfs**. Host KVM/HVF permissions, compatible host
+runtime libraries, and an actual VM smoke test are still required. Run
+`krunlet doctor --rootfs /trusted/rootfs` after installation.
 
 The release pipeline builds each architecture for review on pull requests;
 the rolling `main` Release is only updated after the full Go pipeline
