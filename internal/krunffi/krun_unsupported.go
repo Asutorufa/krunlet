@@ -20,9 +20,23 @@ type Config struct {
 	Network                             bool
 	RestrictedNetwork                   bool
 	NetSocket                           string
+	RunID                               string
 }
 
 var ErrUnsupported = errors.New("libkrun is only supported on linux/amd64, linux/arm64 and darwin/arm64")
 
 func Enter(Config) error     { return ErrUnsupported }
 func Available(string) error { return ErrUnsupported }
+
+type NativeInspection struct {
+	Library          string
+	PkgConfigVersion string
+	Symbols          map[string]bool
+	TSI              bool
+	VirtioNET        bool
+	FirmwareLoadable bool
+}
+
+func InspectNative(lib string) (NativeInspection, error) {
+	return NativeInspection{Library: lib}, ErrUnsupported
+}

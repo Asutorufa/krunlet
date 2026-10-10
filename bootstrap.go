@@ -3,6 +3,7 @@ package krunlet
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/Asutorufa/krunlet/internal/krunffi"
@@ -23,6 +24,9 @@ func init() {
 }
 
 func runSelfHelper(configPath string) error {
+	if err := watchHelperParent(); err != nil {
+		return err
+	}
 	file, err := os.Open(configPath)
 	if err != nil {
 		return err
@@ -32,6 +36,7 @@ func runSelfHelper(configPath string) error {
 	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
 		return err
 	}
+	slog.Debug("krunlet helper enter", "run_id", cfg.RunID)
 	err = krunffi.Enter(cfg)
 	if err != nil && cfg.ErrorPath != "" {
 		_ = os.WriteFile(cfg.ErrorPath, []byte(err.Error()), 0600)

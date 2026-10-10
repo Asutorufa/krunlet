@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Session holds a disposable rootfs whose file changes survive across calls.
@@ -17,6 +18,7 @@ type Session struct {
 	mu     sync.Mutex
 	closed bool
 	root   string
+	marker *os.File
 	runner *Runner
 }
 
@@ -27,28 +29,45 @@ func NewSession(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 	opts = validated.cfg
+	_ = cleanupStaleRoots(os.TempDir(), 24*time.Hour)
 	// Preserve the self-reexec helper mode across the second New call.
 	// Otherwise, an auto-resolved HelperPath looks like an explicit CLI path.
 	if validated.autoHelper {
 		opts.HelperPath = ""
 	}
 	root := opts.RootFS
+	if err := checkRootFSSize(ctx, root, opts.MaxRootFSBytes); err != nil {
+		return nil, fmt.Errorf("rootfs preflight: %w", err)
+	}
 	temp, err := os.MkdirTemp("", "krunlet-session-*")
 	if err != nil {
 		return nil, err
 	}
-	if err = copyRootFS(ctx, root, temp); err != nil {
-		os.RemoveAll(temp)
+	marker, err := markTempRoot(temp)
+	if err != nil {
+		_ = os.RemoveAll(temp)
 		return nil, err
 	}
-	opts.RootFS = temp
+	clone := filepath.Join(temp, "rootfs")
+	if err = os.Mkdir(clone, 0700); err != nil {
+		_ = marker.Close()
+		_ = os.RemoveAll(temp)
+		return nil, err
+	}
+	if err = copyRootFS(ctx, root, clone); err != nil {
+		_ = marker.Close()
+		_ = os.RemoveAll(temp)
+		return nil, err
+	}
+	opts.RootFS = clone
 	opts.Persistent = true
 	r, err := New(opts)
 	if err != nil {
-		os.RemoveAll(temp)
+		_ = marker.Close()
+		_ = os.RemoveAll(temp)
 		return nil, err
 	}
-	return &Session{runner: r, root: temp}, nil
+	return &Session{runner: r, root: clone, marker: marker}, nil
 }
 
 func (s *Session) Run(ctx context.Context, req Request) (Result, error) {
@@ -187,5 +206,9 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	return os.RemoveAll(s.root)
+	if s.marker != nil {
+		_ = s.marker.Close()
+		s.marker = nil
+	}
+	return os.RemoveAll(filepath.Dir(s.root))
 }

@@ -1,7 +1,9 @@
 name: Go
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 jobs:
   test:
     strategy:
@@ -25,7 +27,76 @@ jobs:
             gofmt -d $files
             exit 1
           fi
+      - name: Build without CGO
+        run: CGO_ENABLED=0 go build ./...
+      - name: Build macOS ARM64 CLI
+        if: runner.os == 'macOS'
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/krunlet-darwin-arm64 ./cmd/krunlet
       - name: Test without CGO
         run: CGO_ENABLED=0 go test ./...
       - name: Vet
         run: go vet ./...
+
+      - name: Race detector (Linux)
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=1 go test -race ./...
+
+      - name: Doctor missing-library failure is readable
+        run: |
+          if go run ./cmd/krunlet doctor --lib /krunlet/does-not-exist 2>doctor.err; then
+            echo "doctor unexpectedly accepted a missing library"
+            exit 1
+          fi
+          grep -qi "not ready" doctor.err
+      - name: Native doctor (informational on hosted runners)
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "/dev/kvm detected; run doctor --rootfs on a KVM self-hosted runner with libkrun 1.19.x"
+          else
+            echo "No /dev/kvm: hosted runner cannot execute native microVM integration tests"
+          fi
+
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=5m
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache: false
+      - name: Govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  vm-integration:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, kvm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Require native virtualization and a trusted test rootfs
+        run: |
+          test -r /dev/kvm
+          test -d "${KRUNLET_TEST_ROOTFS:?set KRUNLET_TEST_ROOTFS on the self-hosted runner}"
+      - name: Real VM doctor
+        run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
+      - name: Real VM integration tests (including 32-run stress)
+        env:
+          KRUNLET_STRESS_32: '1'
+        run: CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...

@@ -45,6 +45,11 @@ type VM struct {
 	networkCleanup *networkLease
 	next           uint64
 	closed         bool
+	supervisor     *helperSupervisor
+	quotaRunner    *Runner
+	readyMillis    int64
+	waitDone       chan struct{}
+	waitErr        error
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -74,6 +79,14 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 			_ = sess.Close()
 		}
 	}()
+	if err = sess.runner.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			sess.runner.release()
+		}
+	}()
 	folder, err := os.MkdirTemp(sess.root, ".krunlet-control-")
 	if err != nil {
 		return nil, err
@@ -83,7 +96,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		return nil, errors.New("invalid VM control directory")
 	}
 	control := filepath.ToSlash(rel)
-	status, err := os.CreateTemp("", "krunlet-live-status-*.txt")
+	status, err := os.CreateTemp(filepath.Dir(sess.root), "status-*.txt")
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +107,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 			_ = os.Remove(statusPath)
 		}
 	}()
-	config, err := os.CreateTemp("", "krunlet-live-config-*.json")
+	config, err := os.CreateTemp(filepath.Dir(sess.root), "config-*.json")
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +144,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}
 	vmCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	supervisor := configureHelper(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -151,34 +164,49 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	}
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
-		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath}
-	if err = cmd.Start(); err != nil {
+		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
+		supervisor: supervisor, quotaRunner: sess.runner, waitDone: make(chan struct{})}
+	startBoot := time.Now()
+	if err = supervisor.start(); err != nil {
 		cancel()
 		_ = stdin.Close()
 		return nil, fmt.Errorf("start VM helper: %w", err)
 	}
 	go func() { _, _ = io.Copy(v.stderr, stderr) }()
+	// One goroutine owns Wait. This also detects helpers that crash or exit
+	// without a caller issuing Close; Close releases the gateway and quota.
+	go func() {
+		v.waitErr = cmd.Wait()
+		supervisor.finish()
+		close(v.waitDone)
+	}()
 	startupCtx, done := context.WithTimeout(ctx, cfg.Timeout)
 	defer done()
 	if err = v.await(startupCtx, "KRUNLET_READY"); err != nil {
 		v.terminate()
-		_ = cmd.Wait()
+		<-v.waitDone
 		if b, e := os.ReadFile(statusPath); e == nil && len(b) > 0 {
 			return nil, fmt.Errorf("libkrun helper: %s", strings.TrimSpace(string(b)))
 		}
 		return nil, fmt.Errorf("boot VM: %w; helper stderr: %s", err, v.stderr.String())
 	}
+	v.readyMillis = time.Since(startBoot).Milliseconds()
+	// Closing the owning context also reclaims the rootfs, gateway socket
+	// and VM permit even if the caller forgets an explicit Close.
+	go func() {
+		select {
+		case <-vmCtx.Done():
+		case <-v.waitDone:
+		}
+		_ = v.Close()
+	}()
 	return v, nil
 }
 
 func (v *VM) terminate() {
 	v.stopOnce.Do(func() {
 		v.stop()
-		if v.cmd.Process != nil {
-			// Kill subprocesses in the helper's process group too.
-			_ = syscall.Kill(-v.cmd.Process.Pid, syscall.SIGKILL)
-			_ = v.cmd.Process.Kill()
-		}
+		v.supervisor.terminate()
 	})
 }
 
@@ -216,10 +244,24 @@ func (v *VM) await(ctx context.Context, target string) error {
 
 // Run executes in the already-booted VM. Commands are serialized. Unlike
 // Runner.Run, stdout/stderr are buffered in guest files until exit.
-func (v *VM) Run(ctx context.Context, req Request) (Result, error) {
+func (v *VM) Run(ctx context.Context, req Request) (res Result, runErr error) {
+	start := time.Now()
+	runID := newRunID()
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	res := Result{ExitCode: -1, Files: map[string][]byte{}}
+	defer func() {
+		var callback func(Stats)
+		var policyEnabled bool
+		if v.session != nil {
+			callback = v.session.runner.cfg.OnStats
+			policyEnabled = v.session.runner.cfg.NetworkPolicy != nil
+		}
+		v.mu.Unlock()
+		if callback != nil {
+			callback(Stats{RunID: runID, ReadyMillis: v.readyMillis, DurationMillis: time.Since(start).Milliseconds(),
+				ExitCode: res.ExitCode, PeakMemoryMiB: 0, NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
+		}
+	}()
+	res = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
 	if v.closed {
 		return res, errors.New("VM is closed or has failed")
 	}
@@ -246,7 +288,6 @@ func (v *VM) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	start := time.Now()
 	for name, b := range req.Files {
 		if err := v.session.WriteFile(name, b); err != nil {
 			return res, err
@@ -448,7 +489,7 @@ func (v *VM) Close() error {
 	}
 	v.closed = true
 	_ = v.stdin.Close()
-	waitErr := v.cmd.Wait()
+	<-v.waitDone
 	if v.networkCleanup != nil {
 		v.networkCleanup.Close()
 		v.networkCleanup = nil
@@ -457,11 +498,14 @@ func (v *VM) Close() error {
 	_ = os.Remove(v.configPath)
 	err := v.session.Close()
 	v.session = nil
+	if v.quotaRunner != nil {
+		v.quotaRunner.release()
+		v.quotaRunner = nil
+	}
 	if err != nil {
 		return err
 	}
 	// Signal-terminated VMs are the expected close path.
-	_ = waitErr
 	return nil
 }
 

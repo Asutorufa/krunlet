@@ -405,6 +405,94 @@ run both programs under trusted local principals and do not expose
 the socket to untrusted users. yuhaiin's native inbound and Krunlet
 must use the matching protocol version.
 
+## VM lifecycle, quotas, templates, observability
+
+By default Krunlet limits **each Runner** to
+`max(1, min(4, NumCPU()/2))` concurrent VMs. Use
+`MaxConcurrentVMs` to override. The default admission policy waits for
+a slot until its context expires; `FailFast` returns `ErrTooManyVMs`
+immediately. This is **per Runner**, not a global quota across distinct
+instances or processes. The entire `Runner.Run` timeout now includes
+rootfs sizing, staging, network setup and helper execution.
+
+`MaxRootFSBytes` defaults to **1 GiB** of logical file contents and
+rejects oversized disposable rootfs trees before copying. For strict
+disk/inode limits on an untrusted workload, add host filesystem quotas.
+
+```go
+runner, err := krunlet.New(krunlet.Options{
+    RootFS: "/trusted/rootfs",
+    MaxConcurrentVMs: 2,
+    FailFast: true,
+    MaxRootFSBytes: 512 << 20,
+    OnStats: func(stats krunlet.Stats) {
+        slog.Info("vm completion", "run_id", stats.RunID,
+            "exit_code", stats.ExitCode, "ready_ms", stats.ReadyMillis,
+            "helper_peak_rss_mib", stats.PeakMemoryMiB)
+    },
+})
+```
+
+Use `PrepareTemplate` to make one private rootfs snapshot and reuse it:
+
+```go
+template, err := krunlet.PrepareTemplate("/trusted/rootfs")
+if err != nil { return err }
+defer template.Close()
+runner, err := template.NewRunner(krunlet.Options{CPUs: 2})
+```
+
+Cloning files tries Linux **FICLONE reflinks** first, then safe full
+copy if unsupported. Overlayfs is **not** automatically mounted: it
+requires a separately confined mount namespace, privileged setup and
+guaranteed unmount. Cross-VM writes remain independent, and hardlinks
+are deliberately never used for cloning. Close a template after all
+runners/sessions using it have stopped.
+
+The helper starts in its own process group. On cancellation Krunlet
+sends SIGTERM, then SIGKILL after a 2-second grace period. Linux uses
+`PR_SET_PDEATHSIG` plus parent pidfd monitoring; the built-in macOS
+helper monitors `kqueue EVFILT_PROC NOTE_EXIT`. Process-group killing
+does not catch deliberately detached session/process groups: a
+production deployment should also use **cgroup v2 / cgroup.kill**.
+Krunlet reclaims signed/locked stale rootfs/session/template directories
+older than 24 hours at startup, without touching unmarked directories.
+Status/config files and Unix gateway sockets are removed on normal
+shutdown.
+
+`Stats` callbacks use `RunID` for correlation and do not introduce a
+Prometheus dependency. One-shot `ReadyMillis=-1` means guest readiness
+cannot be measured separately from the helper's final exit. Peak memory
+is the host **helper RSS**, not guest-allocated physical RAM.
+
+### Native diagnostics
+
+```sh
+# Static ABI/library checks, including NET and TSI symbol presence:
+krunlet doctor
+
+# Real VM boot with a trusted rootfs containing /bin/true:
+krunlet doctor --rootfs /trusted/rootfs
+```
+
+Doctor outputs JSON including native ABI symbols, pkg-config's detected
+libkrun version (which may not match a manually specified library), host
+/dev/kvm accessibility on Linux, separately loadable libkrunfw status,
+and real smoke boot duration/exit code when `--rootfs` is given.
+For a real VM, use libkrun **1.19.x**; NET=1 is needed for gVisor networking.
+The ordinary GitHub-hosted runners generally cannot run native KVM tests;
+the opt-in `vm-integration` workflow job targets a self-hosted runner with
+the `kvm` label and `KRUNLET_TEST_ROOTFS` configured.
+
+### CI and releases
+
+CI checks non-cgo unit tests, vet, Linux race detector,
+golangci-lint and govulncheck. Native boot tests are opt-in with
+`workflow_dispatch` on a KVM runner. Pushing a `v*` tag builds
+Linux/macOS binaries, checksums and a changelog-backed GitHub Release.
+Do not create a stable release tag until the native smoke, process
+cleanup and network-security integration tests pass on target hosts.
+
 ## Isolation and limitations
 
 - `libkrun` defaults to TSI network when no conventional NIC is attached. Krunlet explicitly requests a vsock without TSI features when network is disabled, and sets an empty inbound port map. This needs runtime verification against your exact libkrun build before it can be relied upon as a security boundary.
