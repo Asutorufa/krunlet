@@ -43,6 +43,10 @@ jobs:
             gofmt -d $files
             exit 1
           fi
+      - name: Build and test slim no-embed configuration
+        run: |
+          CGO_ENABLED=0 go build -tags nokrunlet_embed ./...
+          CGO_ENABLED=0 go test -tags nokrunlet_embed ./...
       - name: Build without CGO
         run: CGO_ENABLED=0 go build ./...
       - name: Build macOS ARM64 CLI

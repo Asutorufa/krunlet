@@ -204,6 +204,8 @@ jobs:
           mkdir -p dist
           target="dist/krunlet-$GOOS-$GOARCH"
           go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" -o "$target" ./cmd/krunlet
+          go build -tags nokrunlet_embed -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" -o "dist/slim-$GOOS-$GOARCH" ./cmd/krunlet
+          printf 'embedded=%s\\nslim=%s\\n' "$(wc -c < "$target")" "$(wc -c < "dist/slim-$GOOS-$GOARCH")" > "dist/size-$GOOS-$GOARCH.txt"
           test -s "$target"
           test "$("./$target" version)" = "krunlet $version"
           if [ "$GOOS" = darwin ]; then
@@ -230,6 +232,7 @@ jobs:
           path: |
             dist/krunlet-*
             dist/native-manifest-*
+            dist/size-*
           if-no-files-found: error
           retention-days: 14
 
@@ -289,6 +292,7 @@ jobs:
           mkdir -p release
           cp dist/krunlet-* release/
           cp dist/native-manifest-* release/
+          cp dist/size-*.txt release/
           cp install.sh release/install.sh
           cp cmd/krunlet/legal/Apache-2.0.txt release/
           cp cmd/krunlet/legal/LGPL-2.1-only.txt release/
@@ -319,6 +323,7 @@ jobs:
             echo '- Linux system libc and other external native transitive dependencies remain platform-dependent; macOS assets are ad-hoc signed (not notarized).'
             echo '- libkrun: Apache-2.0 (https://github.com/libkrun/libkrun/tree/v1.19.6); firmware: GPL-2.0/LGPL-2.1 (https://github.com/libkrun/libkrunfw). Redistributors must satisfy the corresponding-source obligations.'
             echo '- Native libkrun and firmware SHA-256, pinned sources and patched kernel are listed in each native-manifest-OS-ARCH.json asset.'
+            echo '- Embedded vs. slim CLI byte sizes are reported per platform in size-OS-ARCH.txt.'
             for manifest in release/native-manifest-*.json; do
               echo "- $(basename "$manifest")"
               cat "$manifest"

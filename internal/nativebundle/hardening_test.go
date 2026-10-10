@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -158,4 +159,12 @@ func TestConcurrentProcessesSingleCache(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("found %d bundle directories", count)
 	}
+}
+
+func TestNoExecLocationReportsReadableError(t *testing.T) {
+	if runtime.GOOS != "linux" { t.Skip("Linux mount test") }
+	if _, err := os.Stat("/dev/shm"); err != nil { t.Skip(err) }
+	err := checkExecutableCache("/dev/shm")
+	if err == nil { t.Skip("/dev/shm is executable on this host") }
+	if !strings.Contains(err.Error(), "noexec") { t.Fatalf("unexpected noexec error: %v", err) }
 }

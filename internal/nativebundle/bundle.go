@@ -150,6 +150,9 @@ func stageBundle(root, libName, fwName string, lib, fw []byte) (Info, error) {
 	if err := privateDir(root); err != nil {
 		return info, err
 	}
+	if err := checkExecutableCache(root); err != nil {
+		return info, err
+	}
 	release, err := bundleLock(root)
 	if err != nil {
 		return info, err
