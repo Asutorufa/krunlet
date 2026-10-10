@@ -33,6 +33,11 @@ func prepareVMCgroup(opts Options) (*vmCgroup, error) {
 	if _, err = os.Stat(filepath.Join(root, "cgroup.controllers")); err != nil {
 		return nil, fmt.Errorf("cgroup v2 delegation required at %s: %w", root, err)
 	}
+	// Only reap old, empty cgroups. Never kill an active VM merely
+	// because another process owns a similarly named cgroup.
+	if err := cleanupStaleVMGroups(root, 24*time.Hour); err != nil {
+		return nil, fmt.Errorf("scan stale VM cgroups: %w", err)
+	}
 	dir, err := os.MkdirTemp(root, "krunlet-vm-")
 	if err != nil {
 		return nil, fmt.Errorf("create per-VM cgroup: %w", err)
@@ -149,4 +154,24 @@ func (cg *vmCgroup) Close() error {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// cleanupStaleVMGroups uses both the 24h age and the kernel populated flag.
+// A stale cgroup may be left on disk when its parent is SIGKILLed; an
+// active cgroup must never be removed by a different Runner process.
+func cleanupStaleVMGroups(parent string, age time.Duration) error {
+	entries, err := os.ReadDir(parent)
+	if err != nil { return err }
+	cutoff := time.Now().Add(-age)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "krunlet-vm-") { continue }
+		path := filepath.Join(parent, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.ModTime().After(cutoff) { continue }
+		events, err := os.ReadFile(filepath.Join(path,"cgroup.events"))
+		if err != nil { continue }
+		if !strings.Contains("\n"+string(events), "\npopulated 0\n") { continue }
+		_ = os.Remove(path)
+	}
+	return nil
 }
