@@ -30,7 +30,9 @@ type DoctorReport struct {
 func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, error) {
 	result := DoctorReport{Platform: runtime.GOOS + "/" + runtime.GOARCH}
 	nativeLib, err := nativebundle.Library(lib)
-	if err != nil { return result, fmt.Errorf("prepare libkrun: %w", err) }
+	if err != nil {
+		return result, fmt.Errorf("prepare libkrun: %w", err)
+	}
 	native, err := krunffi.InspectNative(nativeLib)
 	result.Native = native
 	if err != nil {

@@ -397,7 +397,9 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		return result, err
 	}
 	nativeLib, err := nativebundle.Library(r.cfg.LibraryPath)
-	if err != nil { return result, fmt.Errorf("prepare libkrun: %w", err) }
+	if err != nil {
+		return result, fmt.Errorf("prepare libkrun: %w", err)
+	}
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
 		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: nativeLib,
@@ -528,6 +530,8 @@ func Doctor(lib string) error {
 		return errors.New("libkrun requires Apple Silicon on macOS")
 	}
 	resolved, err := nativebundle.Library(lib)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	return krunffi.Available(resolved)
 }

@@ -88,7 +88,7 @@ jobs:
             test -n "$lib" && test -n "$fw"
             cp -L "$lib" "$stage/libkrun.so.1"
             cp -L "$fw" "$stage/libkrunfw.so.5"
-            patchelf --set-rpath '\$ORIGIN' "$stage/libkrun.so.1"
+            patchelf --set-rpath '$ORIGIN' "$stage/libkrun.so.1"
             readelf -d "$stage/libkrun.so.1" | grep -F '\$ORIGIN'
             nm -D "$stage/libkrun.so.1" | grep -F 'krun_add_net_unixstream'
             ldd "$stage/libkrun.so.1" | tee "$RUNNER_TEMP/native-ldd.txt"
