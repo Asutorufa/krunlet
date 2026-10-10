@@ -172,9 +172,13 @@ jobs:
       - name: Real VM doctor (pinned ABI and NET=1)
         run: |
           set -euo pipefail
-          # The unprivileged process retains PKG_CONFIG_PATH and owns its
-          # delegated cgroup. Sudo would discard pkg-config environment.
-          go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS" > doctor.json
+          # GitHub's hosted VM image restricts /dev/kvm to privileged
+          # processes even when the device node mode looks writable.
+          # Preserve pkg-config + guest paths explicitly through sudo.
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS" > doctor.json
           python3 - <<'PY'
           import json
           with open("doctor.json", encoding="utf-8") as f:
@@ -191,4 +195,8 @@ jobs:
           KRUNLET_STRESS_32: '1'
         run: |
           set -euo pipefail
-          CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            "KRUNLET_STRESS_32=$KRUNLET_STRESS_32" \
+            CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
