@@ -3,10 +3,13 @@
 package krunlet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +57,8 @@ func TestNative32RunsBounded(t *testing.T) {
 		t.Skip("set KRUNLET_STRESS_32=1 to enable full VM stress")
 	}
 	root := integrationRootFS(t)
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
 	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, MaxConcurrentVMs: 4})
 	if err != nil {
 		t.Fatal(err)
@@ -79,5 +84,19 @@ func TestNative32RunsBounded(t *testing.T) {
 	close(errorsChan)
 	for e := range errorsChan {
 		t.Error(e)
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "krunlet-") {
+			t.Errorf("VM stress left a temporary resource: %s", entry.Name())
+		}
+	}
+	// The helper's argv includes --config under the scratch directory.
+	// Confirm ps sees no surviving child from this particular test run.
+	if output, err := exec.Command("ps", "-eo", "args").Output(); err == nil && bytes.Contains(output, []byte(scratch)) {
+		t.Fatalf("VM stress left a helper process referencing %s", scratch)
 	}
 }

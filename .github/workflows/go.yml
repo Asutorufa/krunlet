@@ -91,5 +91,7 @@ jobs:
           test -d "${KRUNLET_TEST_ROOTFS:?set KRUNLET_TEST_ROOTFS on the self-hosted runner}"
       - name: Real VM doctor
         run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
-      - name: Real VM integration tests
-        run: CGO_ENABLED=0 go test -tags vm_integration ./...
+      - name: Real VM integration tests (including 32-run stress)
+        env:
+          KRUNLET_STRESS_32: '1'
+        run: CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
