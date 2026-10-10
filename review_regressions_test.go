@@ -92,7 +92,7 @@ func TestReviewReleaseInstallerRequiresSignature(t *testing.T) {
 	if !strings.Contains(string(workflow), "checksums.sig") {
 		t.Fatal("release workflow does not sign checksum manifest")
 	}
-	if !strings.Contains(string(installer), "openssl dgst -sha256 -verify") || !strings.Contains(string(installer), "checksums.txt.sig") {
+	if !strings.Contains(string(installer), "openssl dgst -sha256 -verify") || !strings.Contains(string(installer), "checksums.sig") {
 		t.Fatal("installer does not verify pinned signing identity before checksums")
 	}
 }

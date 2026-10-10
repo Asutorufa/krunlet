@@ -55,64 +55,75 @@ func TestReviewUndelegatedCgroupFailsForUnprivilegedUser(t *testing.T) {
 	}
 }
 
-// gatedHostPressure starts a host-side shell which blocks on fd 3 BEFORE
-// it forks or allocates. The parent first moves that shell to cgroup.procs,
-// then releases the gate; the pressure load can never escape containment.
-func gatedHostPressure(ctx context.Context, script string) *exec.Cmd {
-	gate := "IFS= read -r token <&3 || [ -n \"$token\" ] || exit 99\n"
-	return exec.CommandContext(ctx, "/bin/sh", "-c", gate+script)
+// gatedHostPressure runs a directly gated Python workload so a shell cannot
+// accidentally consume a closed pipe and report a successful no-op. Each
+// child verifies its real /proc/self/cgroup membership before allocating
+// memory or attempting forks.
+func gatedHostPressure(ctx context.Context, work string) *exec.Cmd {
+	program := `import os, sys, subprocess
+token = os.read(3, 1)
+if token != b"1":
+    sys.exit("cgroup startup gate was not released")
+group = os.environ["KRUNLET_EXPECT_CGROUP"]
+membership = open("/proc/self/cgroup", encoding="utf8").read()
+if group not in membership:
+    sys.exit("process was NOT attached to cgroup: " + membership)
+` + work
+	return exec.CommandContext(ctx, "python3", "-c", program)
 }
 
 func TestReviewRealHostCgroupOOMIsDistinguishable(t *testing.T) {
-	parent := integrationCgroup(t)
-	cg, err := prepareVMCgroup(Options{CgroupParent: parent, MemoryMiB: 256, CgroupMemoryMaxBytes: 128 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cg, err := prepareVMCgroup(Options{CgroupParent: integrationCgroup(t), MemoryMiB: 256, CgroupMemoryMaxBytes: 128 << 20})
+	if err != nil { t.Fatal(err) }
 	defer cg.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	cmd := gatedHostPressure(ctx, "exec python3 -c 'b=bytearray(512*1024*1024); b[::4096]=bytes([1]) * ((len(b)+4095)//4096)'")
+	cmd := gatedHostPressure(ctx, `import mmap
+mem = mmap.mmap(-1, 512 * 1024 * 1024)
+for n in range(0, len(mem), 4096): mem[n] = 1
+print("unexpected: 512 MiB allocation survived 128 MiB memory.max", flush=True)
+`)
 	sup := configureHelper(cmd)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := startHelperInCgroup(sup, cg); err != nil {
-		t.Fatal(err)
-	}
+	// configureHelper owns Env; add the expected membership AFTER it.
+	cmd.Env = append(cmd.Env, "KRUNLET_EXPECT_CGROUP="+filepath.Base(cg.path))
+	var stderr, stdout bytes.Buffer
+	cmd.Stderr, cmd.Stdout = &stderr, &stdout
+	if err := startHelperInCgroup(sup, cg); err != nil { t.Fatal(err) }
 	waitErr := cmd.Wait()
 	sup.finish()
 	usage, err := cg.usage()
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	if !usage.OOMKilled || usage.MemoryPeakBytes == nil || *usage.MemoryPeakBytes == 0 {
-		t.Fatalf("real memory.max OOM missing (wait=%v, peak=%v): usage=%+v stderr=%s", waitErr, usage.MemoryPeakBytes, usage, stderr.String())
+		t.Fatalf("missing real cgroup OOM: wait=%v peak=%v events=%+v stderr=%q stdout=%q", waitErr, usage.MemoryPeakBytes, usage, stderr.String(), stdout.String())
 	}
 }
 
 func TestReviewRealHostPidsMaxIsDistinguishable(t *testing.T) {
 	cg, err := prepareVMCgroup(Options{CgroupParent: integrationCgroup(t), MemoryMiB: 256, CgroupPidsMax: 32})
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	defer cg.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	// This workload deliberately exceeds the host pids controller. The
-	// bounded context and cgroup.kill reclaim every forked sleep process.
-	cmd := gatedHostPressure(ctx, "i=0; while [ \"$i\" -lt 96 ]; do sleep 30 & i=$((i+1)); done; wait")
+	cmd := gatedHostPressure(ctx, `children = []
+for _ in range(80):
+    try:
+        children.append(subprocess.Popen(["/bin/sleep", "30"]))
+    except OSError:
+        break
+for child in children: child.kill()
+for child in children: child.wait()
+`)
 	sup := configureHelper(cmd)
-	if err := startHelperInCgroup(sup, cg); err != nil {
-		t.Fatal(err)
-	}
-	_ = cmd.Wait()
+	cmd.Env = append(cmd.Env, "KRUNLET_EXPECT_CGROUP="+filepath.Base(cg.path))
+	var stderr, stdout bytes.Buffer
+	cmd.Stderr, cmd.Stdout = &stderr, &stdout
+	if err := startHelperInCgroup(sup, cg); err != nil { t.Fatal(err) }
+	waitErr := cmd.Wait()
 	sup.finish()
 	usage, err := cg.usage()
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	if !usage.PidsLimited {
-		t.Fatalf("host fork load bypassed pids.max: %+v", usage)
+		t.Fatalf("missing real pids.max event: wait=%v events=%+v stderr=%q stdout=%q", waitErr, usage, stderr.String(), stdout.String())
 	}
 }
 
@@ -189,8 +200,11 @@ func TestReviewVMHostOOMMappedToTypedError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := gatedHostPressure(ctx, "exec python3 -c 'b=bytearray(1024*1024*1024); b[::4096]=bytes([1]) * ((len(b)+4095)//4096)'")
-	cmd.Env = append(os.Environ(), "KRUNLET_CGROUP_GATE_FD=3")
+	cmd := gatedHostPressure(ctx, `import mmap
+mem = mmap.mmap(-1, 1024 * 1024 * 1024)
+for n in range(0, len(mem), 4096): mem[n] = 1
+`)
+	cmd.Env = append(os.Environ(), "KRUNLET_EXPECT_CGROUP="+filepath.Base(group))
 	cmd.ExtraFiles = []*os.File{rd}
 	if err := cmd.Start(); err != nil {
 		_ = rd.Close()
