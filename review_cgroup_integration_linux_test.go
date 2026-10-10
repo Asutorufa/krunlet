@@ -62,7 +62,7 @@ func TestReviewUndelegatedCgroupFailsForUnprivilegedUser(t *testing.T) {
 func gatedHostPressure(ctx context.Context, work string) *exec.Cmd {
 	program := `import os, sys, subprocess
 token = os.read(3, 1)
-if token != b"1":
+if token != bytes([1]):
     sys.exit("cgroup startup gate was not released")
 group = os.environ["KRUNLET_EXPECT_CGROUP"]
 membership = open("/proc/self/cgroup", encoding="utf8").read()
