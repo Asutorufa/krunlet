@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/Asutorufa/krunlet/internal/nativebundle"
 	"github.com/ebitengine/purego"
 )
 
@@ -37,6 +38,7 @@ type Config struct {
 	Ports             []string
 	RLimits           []string
 	Library           string
+	Firmware          string
 	ErrorPath         string
 	RunID             string
 }
@@ -60,6 +62,13 @@ type api struct {
 // Enter configures and starts a VM; success never returns. Only invoke in a
 // dedicated subprocess. The native lib is loaded at runtime, not link time.
 func Enter(c Config) error {
+	if c.Kernel == nil {
+		fw, _, _, err := openFirmware(c.Library, c.Firmware)
+		if err != nil {
+			return err
+		}
+		defer purego.Dlclose(fw)
+	}
 	libName := c.Library
 	if libName == "" {
 		switch runtime.GOOS {
@@ -259,6 +268,12 @@ func Available(lib string) error {
 
 // NativeInspection reports ABI feature presence without starting a VM.
 type NativeInspection struct {
+	LibraryABI       int
+	FirmwareABI      int
+	FirmwarePath     string
+	FirmwareVersion  string
+	SymbolsPresent   int
+	SymbolsRequired  int
 	Library          string
 	PkgConfigVersion string
 	Symbols          map[string]bool
@@ -271,6 +286,12 @@ type NativeInspection struct {
 // version or command-line package version). Version from pkg-config is only
 // informational and may refer to a different library installation.
 func InspectNative(lib string) (NativeInspection, error) {
+	return InspectNativePair(lib, "")
+}
+
+// InspectNativePair verifies the same absolute firmware selected by Resolve.
+// A successful dlopen of some unrelated host firmware is not sufficient.
+func InspectNativePair(lib, fw string) (NativeInspection, error) {
 	if lib == "" {
 		if runtime.GOOS == "darwin" {
 			lib = "libkrun.dylib"
@@ -278,7 +299,16 @@ func InspectNative(lib string) (NativeInspection, error) {
 			lib = "libkrun.so.1"
 		}
 	}
-	report := NativeInspection{Library: lib, Symbols: make(map[string]bool)}
+	report := NativeInspection{Library: lib, LibraryABI: 1, Symbols: make(map[string]bool)}
+	firmwareHandle, abi, firmwarePath, err := openFirmware(lib, fw)
+	if err != nil {
+		return report, err
+	}
+	defer purego.Dlclose(firmwareHandle)
+	report.FirmwareABI = int(abi)
+	report.FirmwareVersion = fmt.Sprintf("ABI %d (full version only from verified build manifest)", abi)
+	report.FirmwarePath = firmwarePath
+	report.FirmwareLoadable = true
 	handle, err := purego.Dlopen(lib, purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil {
 		return report, fmt.Errorf("open native libkrun %q: %w", lib, err)
@@ -293,6 +323,10 @@ func InspectNative(lib string) (NativeInspection, error) {
 	for _, name := range names {
 		_, e := purego.Dlsym(handle, name)
 		report.Symbols[name] = e == nil
+		report.SymbolsRequired++
+		if e == nil {
+			report.SymbolsPresent++
+		}
 	}
 	report.TSI = report.Symbols["krun_add_vsock"] && report.Symbols["krun_disable_implicit_vsock"]
 	report.VirtioNET = report.Symbols["krun_add_net_unixstream"]
@@ -300,17 +334,47 @@ func InspectNative(lib string) (NativeInspection, error) {
 	if out, e := cmd.Output(); e == nil {
 		report.PkgConfigVersion = strings.TrimSpace(string(out))
 	}
-	for _, fw := range []string{
-		filepath.Join(filepath.Dir(lib), "libkrunfw.so.5"),
-		filepath.Join(filepath.Dir(lib), "libkrunfw.dylib"),
-		"libkrunfw.so.5", "libkrunfw.so.1", "libkrunfw.so", "libkrunfw.dylib",
-	} {
-		id, e := purego.Dlopen(fw, purego.RTLD_NOW|purego.RTLD_LOCAL)
-		if e == nil {
-			report.FirmwareLoadable = true
-			_ = purego.Dlclose(id)
-			break
+	return report, nil
+}
+
+func firmwareFilename() string {
+	if runtime.GOOS == "darwin" {
+		return "libkrunfw.5.dylib"
+	}
+	return "libkrunfw.so.5"
+}
+
+// openFirmware must execute before libkrun's dlopen. libkrun 1.19.6
+// loads firmware by bare SONAME at VM creation rather than via DT_NEEDED.
+// Preloading its *verified absolute file* pins the correct handle.
+func openFirmware(lib, fw string) (uintptr, int32, string, error) {
+	if fw == "" {
+		fw = firmwareFilename()
+		if filepath.IsAbs(lib) {
+			sibling := filepath.Join(filepath.Dir(lib), fw)
+			if _, err := os.Stat(sibling); err == nil {
+				fw = sibling
+			}
 		}
 	}
-	return report, nil
+	handle, err := purego.Dlopen(fw, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		if runtime.GOOS == "darwin" {
+			return 0, 0, fw, fmt.Errorf("macOS cannot load extracted signed libkrunfw at %s (check code signature and library validation): %w", fw, err)
+		}
+		return 0, 0, fw, fmt.Errorf("load required libkrunfw ABI 5 from %s: %w", fw, err)
+	}
+	version, err := purego.Dlsym(handle, "krunfw_get_version")
+	if err != nil {
+		_ = purego.Dlclose(handle)
+		return 0, 0, fw, fmt.Errorf("libkrunfw missing krunfw_get_version: %w", err)
+	}
+	var getVersion func() int32
+	purego.RegisterFunc(&getVersion, version)
+	abi := getVersion()
+	if err := nativebundle.ValidateABI(int(abi)); err != nil {
+		_ = purego.Dlclose(handle)
+		return 0, abi, fw, err
+	}
+	return handle, abi, fw, nil
 }

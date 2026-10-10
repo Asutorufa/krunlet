@@ -12,15 +12,15 @@ type KernelConfig struct {
 }
 
 type Config struct {
-	Kernel                              *KernelConfig
-	RootFS, WorkDir, Library, ErrorPath string
-	Command, Env, Ports, RLimits        []string
-	CPUs                                uint8
-	MemoryMiB                           uint32
-	Network                             bool
-	RestrictedNetwork                   bool
-	NetSocket                           string
-	RunID                               string
+	Kernel                                        *KernelConfig
+	RootFS, WorkDir, Library, Firmware, ErrorPath string
+	Command, Env, Ports, RLimits                  []string
+	CPUs                                          uint8
+	MemoryMiB                                     uint32
+	Network                                       bool
+	RestrictedNetwork                             bool
+	NetSocket                                     string
+	RunID                                         string
 }
 
 var ErrUnsupported = errors.New("libkrun is only supported on linux/amd64, linux/arm64 and darwin/arm64")
@@ -29,6 +29,12 @@ func Enter(Config) error     { return ErrUnsupported }
 func Available(string) error { return ErrUnsupported }
 
 type NativeInspection struct {
+	LibraryABI       int
+	FirmwareABI      int
+	FirmwarePath     string
+	FirmwareVersion  string
+	SymbolsPresent   int
+	SymbolsRequired  int
 	Library          string
 	PkgConfigVersion string
 	Symbols          map[string]bool
@@ -39,4 +45,8 @@ type NativeInspection struct {
 
 func InspectNative(lib string) (NativeInspection, error) {
 	return NativeInspection{Library: lib}, ErrUnsupported
+}
+
+func InspectNativePair(lib, fw string) (NativeInspection, error) {
+	return NativeInspection{Library: lib, FirmwarePath: fw}, ErrUnsupported
 }

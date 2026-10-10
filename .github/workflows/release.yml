@@ -86,6 +86,7 @@ jobs:
           brew tap libkrun/krun
           brew trust libkrun/krun
           brew install libkrunfw lld llvm xz
+          test "$(brew list --versions libkrunfw | awk '{print $2}')" = "5.6.2"
           test -f "$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
           test -f "$(brew --prefix llvm)/lib/libclang.dylib"
       - name: Build pinned libkrun with NET=1 and stage relocatable bundle
@@ -110,6 +111,8 @@ jobs:
             cp -L "$fw" "$stage/libkrunfw.so.5"
             patchelf --set-rpath '$ORIGIN' "$stage/libkrun.so.1"
             readelf -d "$stage/libkrun.so.1" | grep -F '$ORIGIN'
+            # libkrun 1.19.6 uses runtime dlopen, not DT_NEEDED, for firmware.
+            strings "$stage/libkrun.so.1" | grep -Fx libkrunfw.so.5
             nm -D "$stage/libkrun.so.1" | grep -F 'krun_add_net_unixstream'
             ldd "$stage/libkrun.so.1" | tee "$RUNNER_TEMP/native-ldd.txt"
             ! grep -q 'not found' "$RUNNER_TEMP/native-ldd.txt"
@@ -131,26 +134,57 @@ jobs:
             rustc -vV # fail immediately if dyld is loading an incompatible LLVM
             make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
             lib="$RUNNER_TEMP/libkrun/target/release/libkrun.1.19.6.dylib"
-            fw="$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
+            fw="$(brew --prefix libkrunfw)/lib/libkrunfw.5.dylib"
             test -n "$lib" && test -f "$lib" && test -f "$fw"
             cp -L "$lib" "$stage/libkrun.dylib"
-            cp -L "$fw" "$stage/libkrunfw.dylib"
+            cp -L "$fw" "$stage/libkrunfw.5.dylib"
             # A signed single-file CLI must load firmware relative to its
             # extracted libkrun, not a machine-specific Homebrew prefix.
             install_name_tool -id @loader_path/libkrun.dylib "$stage/libkrun.dylib"
-            install_name_tool -id @loader_path/libkrunfw.dylib "$stage/libkrunfw.dylib"
+            install_name_tool -id @loader_path/libkrunfw.5.dylib "$stage/libkrunfw.5.dylib"
             while read -r dep; do
               [ -n "$dep" ] || continue
-              install_name_tool -change "$dep" @loader_path/libkrunfw.dylib "$stage/libkrun.dylib"
+              install_name_tool -change "$dep" @loader_path/libkrunfw.5.dylib "$stage/libkrun.dylib"
             done < <(otool -L "$stage/libkrun.dylib" | awk 'NR>1 {print $1}' | grep libkrunfw || true)
             otool -L "$stage/libkrun.dylib"
-            codesign --force --sign - "$stage/libkrunfw.dylib"
+            codesign --force --sign - "$stage/libkrunfw.5.dylib"
             codesign --force --sign - "$stage/libkrun.dylib"
-            codesign --verify --strict "$stage/libkrunfw.dylib"
+            codesign --verify --strict "$stage/libkrunfw.5.dylib"
             codesign --verify --strict "$stage/libkrun.dylib"
           fi
           test -s "$stage/libkrun."* 
           test -s "$stage/libkrunfw."*
+          # This manifest fingerprints the *staged bytes*, not a system lib.
+          STAGE="$stage" GOOS="$GOOS" python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess
+          stage = pathlib.Path(os.environ["STAGE"])
+          linux = os.environ["GOOS"] == "linux"
+          lib = stage / ("libkrun.so.1" if linux else "libkrun.dylib")
+          fw = stage / ("libkrunfw.so.5" if linux else "libkrunfw.5.dylib")
+          baseline = ""
+          if linux:
+              versions = re.findall(r"GLIBC_(\d+\.\d+)", subprocess.check_output(["readelf", "-V", str(lib)], text=True))
+              if versions:
+                  baseline = max(versions, key=lambda x: tuple(map(int, x.split("."))))
+          version = "5.5.0+ds-1" if linux else "5.6.2"
+          fw_tag = "v5.5.0" if linux else "v5.6.2"
+          kernel = "linux-6.12.91" if linux else "linux-6.12.109"
+          data = {
+              "libkrun_version": "1.19.6",
+              "libkrun_commit": "227b2de6ed323fe180e02f871c5f325a90c13cc2",
+              "firmware_version": version,
+              "firmware_abi": 5,
+              "glibc_baseline": baseline,
+              "libkrun_sha256": hashlib.sha256(lib.read_bytes()).hexdigest(),
+              "libkrunfw_sha256": hashlib.sha256(fw.read_bytes()).hexdigest(),
+              "libkrun_source": "https://github.com/libkrun/libkrun/tree/v1.19.6",
+              "libkrunfw_source": "https://github.com/libkrun/libkrunfw/tree/" + fw_tag,
+              "kernel_source": "https://cdn.kernel.org/pub/linux/kernel/v6.x/" + kernel + ".tar.xz",
+              "patches_source": "https://github.com/libkrun/libkrunfw/tree/" + fw_tag + "/patches",
+          }
+          (stage / "manifest.json").write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(data, sort_keys=True))
+          PY
       - name: Build single-file CLI with embedded native runtime
         shell: bash
         env:
@@ -172,12 +206,15 @@ jobs:
           mkdir -p dist
           target="dist/krunlet-$GOOS-$GOARCH"
           go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" -o "$target" ./cmd/krunlet
+          go build -tags nokrunlet_embed -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" -o "dist/slim-$GOOS-$GOARCH" ./cmd/krunlet
           test -s "$target"
           test "$("./$target" version)" = "krunlet $version"
           if [ "$GOOS" = darwin ]; then
             codesign --force --sign - --entitlements docs/krunlet.entitlements "$target"
             codesign --verify --strict "$target"
           fi
+          printf 'embedded=%s\nslim=%s\n' "$(wc -c < "$target" | tr -d '[:space:]')" "$(wc -c < "dist/slim-$GOOS-$GOARCH" | tr -d '[:space:]')" > "dist/size-$GOOS-$GOARCH.txt"
+          cp internal/nativebundle/assets/manifest.json "dist/native-manifest-$GOOS-$GOARCH.json"
           go test ./internal/nativebundle
           # Release artifact MUST resolve its embedded library without
           # requiring a system libkrun installation.
@@ -185,16 +222,99 @@ jobs:
           grep -q 'krunlet/native/' dist/doctor.json
           grep -q '"VirtioNET":true' dist/doctor.json
           grep -q '"FirmwareLoadable":true' dist/doctor.json
+          if [ "$GOOS" = darwin ]; then
+            cachelib="$(python3 -c 'import json; print(json.load(open("dist/doctor.json"))["native_bundle"]["firmware"])')"
+            test -f "$cachelib"
+            codesign --verify --strict "$cachelib"
+            codesign --verify --strict "$(dirname "$cachelib")/libkrun.dylib"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: krunlet-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/krunlet-*
+          path: |
+            dist/krunlet-*
+            dist/native-manifest-*
+            dist/size-*
           if-no-files-found: error
           retention-days: 14
 
+
+  vm-embedded-smoke:
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: krunlet-linux-amd64
+          path: dist
+      - name: Prove VM runs with embedded libraries in a clean runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm || { echo "::error::KVM is mandatory for clean embedded smoke"; exit 1; }
+          chmod +x dist/krunlet-linux-amd64
+          sudo apt-get update -y
+          sudo apt-get install -y busybox-static
+          guest="$RUNNER_TEMP/guest-rootfs"
+          mkdir -p "$guest/bin" "$guest/tmp"
+          chmod 1777 "$guest/tmp"
+          cp "$(command -v busybox)" "$guest/bin/busybox"
+          ln -s busybox "$guest/bin/true"
+          mkdir -p "$RUNNER_TEMP/clean-cache" "$RUNNER_TEMP/fake-cache" "$RUNNER_TEMP/fake-host" "$RUNNER_TEMP/proof"
+          printf 'incorrect-native-library\n' > "$RUNNER_TEMP/fake-host/libkrun.so.1"
+          printf 'incorrect-firmware\n' > "$RUNNER_TEMP/fake-host/libkrunfw.so.5"
+          # ubuntu:24.04 does not contain a libkrun/libkrunfw package.
+          # Install only other dynamically-linked host runtime prerequisites.
+          for mode in clean fake; do
+            if [ "$mode" = clean ]; then
+              cache="$RUNNER_TEMP/clean-cache"
+              fake_env=
+            else
+              cache="$RUNNER_TEMP/fake-cache"
+              fake_env="-e LD_LIBRARY_PATH=/fake-host"
+            fi
+            sudo docker run --rm --privileged --device=/dev/kvm \
+              --mount "type=bind,src=$PWD/dist/krunlet-linux-amd64,dst=/usr/local/bin/krunlet,readonly" \
+              --mount "type=bind,src=$guest,dst=/guest,readonly" \
+              --mount "type=bind,src=$cache,dst=/cache" \
+              --mount "type=bind,src=$RUNNER_TEMP/fake-host,dst=/fake-host,readonly" \
+              --mount "type=bind,src=$RUNNER_TEMP/proof,dst=/proof" \
+              -e XDG_CACHE_HOME=/cache $fake_env ubuntu:24.04 \
+              /bin/bash -c "set -euo pipefail;
+                if ldconfig -p | grep -E 'libkrun(fw)?[.]'; then echo 'unexpected system libkrun installed'; exit 1; fi;
+                apt-get update -qq >/dev/null;
+                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libssl3t64 libelf1t64 libzstd1 liblzma5 >/dev/null;
+                /usr/local/bin/krunlet doctor --rootfs /guest > /proof/$mode.json"
+          done
+          # Cache belongs to root inside the privileged container and is 0700.
+          # Inspecting the bind mount as the unprivileged runner would report
+          # is_file() == false even though the VM loaded the protected file.
+          sudo --preserve-env=RUNNER_TEMP python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          for mode in ("clean", "fake"):
+              report=json.load(open(os.environ["RUNNER_TEMP"]+"/proof/"+mode+".json"))
+              info=report["native_bundle"]
+              assert info["source"]=="embedded", info
+              assert info["integrity"], info
+              lib=pathlib.Path(info["library"])
+              fw=pathlib.Path(info["firmware"])
+              assert lib.is_absolute() and fw.is_absolute()
+              assert str(lib).startswith("/cache/krunlet/native/"), lib
+              assert lib.name=="libkrun.so.1" and fw.name=="libkrunfw.so.5", info
+              assert info["firmware_abi"]==5, info
+              assert report["smoke_attempted"] and report["smoke_exit_code"]==0, report
+              host_cache=pathlib.Path(os.environ["RUNNER_TEMP"]+("/clean-cache" if mode=="clean" else "/fake-cache"))
+              for name,key in ((lib.name,"library_sha256"),(fw.name,"firmware_sha256")):
+                  actual=host_cache / lib.relative_to("/cache/") .parent / name
+                  assert actual.is_file(), actual
+                  assert hashlib.sha256(actual.read_bytes()).hexdigest()==info[key], (actual,info[key])
+          print("Embedded native pair booted in clean and fake-host KVM containers; absolute paths and hashes match")
+          PY
+
   publish:
     if: github.event_name != 'pull_request'
-    needs: build
+    needs: [build, vm-embedded-smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -247,8 +367,14 @@ jobs:
           test -f dist/krunlet-darwin-arm64
           mkdir -p release
           cp dist/krunlet-* release/
+          cp dist/native-manifest-* release/
+          cp dist/size-*.txt release/
           cp install.sh release/install.sh
-          (cd release && sha256sum krunlet-* install.sh | sort -k2) > release/checksums.txt
+          cp cmd/krunlet/legal/Apache-2.0.txt release/
+          cp cmd/krunlet/legal/LGPL-2.1-only.txt release/
+          cp cmd/krunlet/legal/GPL-2.0-only.txt release/
+          cp cmd/krunlet/legal/SOURCES.md release/NATIVE-SOURCES.md
+          (cd release && sha256sum krunlet-* native-manifest-* install.sh Apache-2.0.txt LGPL-2.1-only.txt GPL-2.0-only.txt size-*.txt NATIVE-SOURCES.md | sort -k2) > release/checksums.txt
 
           {
             echo "## Changes"
@@ -272,9 +398,34 @@ jobs:
             echo '- Check virtualization/host dependencies: krunlet doctor --rootfs /trusted/rootfs.'
             echo '- Linux system libc and other external native transitive dependencies remain platform-dependent; macOS assets are ad-hoc signed (not notarized).'
             echo '- libkrun: Apache-2.0 (https://github.com/libkrun/libkrun/tree/v1.19.6); firmware: GPL-2.0/LGPL-2.1 (https://github.com/libkrun/libkrunfw). Redistributors must satisfy the corresponding-source obligations.'
-            echo '- Verify asset integrity using checksums.txt (SHA-256).'
+            echo '- Native libkrun and firmware SHA-256, pinned sources and patched kernel are listed in each native-manifest-OS-ARCH.json asset.'
+            echo '- Embedded vs. slim CLI byte sizes are reported per platform in size-OS-ARCH.txt.'
+            for manifest in release/native-manifest-*.json; do
+              echo "- $(basename "$manifest")"
+              cat "$manifest"
+            done
+            echo '- Verify the release signature (checksums.sig) using the pinned public key before checking SHA-256.'
             echo '- Security isolation is experimental and depends on host-level virtualization, process and service cgroups.'
           } > release-notes.md
+
+      - name: Sign checksum manifest (pinned public key)
+        if: steps.gate.outputs.skip != 'true'
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.KRUNLET_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::KRUNLET_RELEASE_SIGNING_KEY secret is required; do not publish unsigned releases"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release-private.pem"
+          trap 'rm -f "$RUNNER_TEMP/release-private.pem"' EXIT
+          openssl pkey -in "$RUNNER_TEMP/release-private.pem" -pubout -out "$RUNNER_TEMP/release-public.pem"
+          cmp docs/release-signing-public.pem "$RUNNER_TEMP/release-public.pem"
+          openssl dgst -sha256 -sign "$RUNNER_TEMP/release-private.pem" -out release/checksums.sig release/checksums.txt
+          openssl dgst -sha256 -verify docs/release-signing-public.pem -signature release/checksums.sig release/checksums.txt
 
       - name: Update rolling main tag
         if: steps.gate.outputs.skip != 'true' && github.event_name == 'workflow_run'

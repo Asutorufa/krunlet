@@ -1,38 +1,52 @@
-// Package nativebundle provides optional build-time native assets.
-// Plain go build and go install continue using system-installed libraries.
+// Package nativebundle resolves and stages native libraries embedded in release builds.
+// Ordinary Go builds use host libraries, without bundling native artifacts.
 package nativebundle
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"embed"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
+	"strings"
 )
 
-//go:embed assets/*
-var assets embed.FS
+var ErrABIMismatch = errors.New("libkrun/libkrunfw ABI mismatch")
 
-var cache struct {
-	sync.Once
-	path string
-	err  error
+const requiredFirmwareABI = 5
+
+var errCorruptFile = errors.New("untrusted native cache file")
+
+// ValidateABI reports a distinguishable mismatch before libkrun enters the VM.
+func ValidateABI(actual int) error { return checkABI(requiredFirmwareABI, actual) }
+
+// Info describes the selected native runtime. A verified path always refers
+// to the exact embedded bytes, even if a system library has the same name.
+type Info struct {
+	Source          string `json:"source"`
+	Library         string `json:"library"`
+	Firmware        string `json:"firmware,omitempty"`
+	LibrarySHA256   string `json:"library_sha256,omitempty"`
+	FirmwareSHA256  string `json:"firmware_sha256,omitempty"`
+	Integrity       bool   `json:"integrity"`
+	FirmwareABI     int    `json:"firmware_abi,omitempty"`
+	Fallback        bool   `json:"fallback,omitempty"`
+	LibkrunVersion  string `json:"libkrun_version,omitempty"`
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	GlibcBaseline   string `json:"glibc_baseline,omitempty"`
 }
 
-// Library honors explicit overrides. A complete embedded release bundle is
-// used by default; otherwise the system dynamic loader is used as before.
-// Incomplete or modified bundles fail closed instead of silently falling back.
-func Library(explicit string) (string, error) {
-	if explicit != "" {
-		return explicit, nil
+func checkABI(expected, actual int) error {
+	if expected != actual {
+		return fmt.Errorf("%w: libkrun 1.19.6 requires libkrunfw ABI %d, found ABI %d", ErrABIMismatch, expected, actual)
 	}
-	cache.Do(func() { cache.path, cache.err = materialize() })
-	return cache.path, cache.err
+	return nil
 }
 
 func names() (string, string) {
@@ -40,83 +54,242 @@ func names() (string, string) {
 	case runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64"):
 		return "libkrun.so.1", "libkrunfw.so.5"
 	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
-		return "libkrun.dylib", "libkrunfw.dylib"
+		return "libkrun.dylib", "libkrunfw.5.dylib"
 	default:
 		return "", ""
 	}
 }
 
-func materialize() (string, error) {
+// Library preserves the original API. All execution paths should call
+// Resolve instead so the selected source and hashes can be reported.
+func Library(explicit string) (string, error) {
+	info, err := Resolve(explicit)
+	return info.Library, err
+}
+
+// Resolve is the sole native library selection point. An explicit host
+// override takes precedence; invalid embedded content never silently falls
+// back to an arbitrary system installation.
+func Resolve(explicit string) (Info, error) {
+	return ResolveWithFallback(explicit, false)
+}
+
+func ResolveWithFallback(explicit string, allowHost bool) (Info, error) {
+	if explicit != "" {
+		slog.Info("krunlet using explicitly configured native library", "path", explicit)
+		return Info{Source: "host", Library: explicit}, nil
+	}
 	libName, fwName := names()
 	if libName == "" {
-		return "", nil
+		return Info{}, fmt.Errorf("embedded libkrun not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-	lib, libErr := assets.ReadFile("assets/" + libName)
-	fw, fwErr := assets.ReadFile("assets/" + fwName)
+	lib, libErr := assetRead("assets/" + libName)
+	fw, fwErr := assetRead("assets/" + fwName)
 	if errors.Is(libErr, fs.ErrNotExist) && errors.Is(fwErr, fs.ErrNotExist) {
-		return "", nil
+		slog.Warn("krunlet binary has no embedded libkrun; using system native library")
+		return Info{Source: "host", Fallback: true}, nil
 	}
 	if libErr != nil || fwErr != nil || len(lib) == 0 || len(fw) == 0 {
-		return "", fmt.Errorf("incomplete native bundle (%s: %v, %s: %v)", libName, libErr, fwName, fwErr)
+		if allowHost {
+			slog.Warn("unsafe native bundle overridden by explicit host fallback", "lib_error", libErr, "firmware_error", fwErr)
+			return Info{Source: "host", Fallback: true}, nil
+		}
+		return Info{}, fmt.Errorf("embedded native runtime is incomplete (%s: %v, %s: %v); refusing host fallback", libName, libErr, fwName, fwErr)
 	}
-	h := sha256.New()
-	_, _ = h.Write(lib)
-	_, _ = h.Write(fw)
-	key := fmt.Sprintf("%x", h.Sum(nil))
-	home, err := os.UserCacheDir()
+	var manifest struct {
+		LibkrunVersion  string `json:"libkrun_version"`
+		FirmwareVersion string `json:"firmware_version"`
+		GlibcBaseline   string `json:"glibc_baseline"`
+		LibrarySHA256   string `json:"libkrun_sha256"`
+		FirmwareSHA256  string `json:"libkrunfw_sha256"`
+	}
+	b, err := assetRead("assets/manifest.json")
 	if err != nil {
-		return "", err
+		return Info{}, fmt.Errorf("embedded native libraries lack provenance manifest: %w", err)
 	}
-	parent := filepath.Join(home, "krunlet", "native")
-	if err := os.MkdirAll(parent, 0700); err != nil {
-		return "", err
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return Info{}, fmt.Errorf("invalid embedded native manifest: %w", err)
 	}
-	if err := privateDir(parent); err != nil {
-		return "", err
+	if manifest.LibkrunVersion != "1.19.6" || manifest.LibrarySHA256 != sha(lib) || manifest.FirmwareSHA256 != sha(fw) {
+		if allowHost {
+			slog.Warn("embedded native manifest mismatch; explicitly allowing host library fallback")
+			return Info{Source: "host", Fallback: true}, nil
+		}
+		return Info{}, fmt.Errorf("embedded native manifest does not match libraries or pinned libkrun 1.19.6")
 	}
-	target := filepath.Join(parent, key)
-	if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
-		tmp, err := os.MkdirTemp(parent, ".stage-")
+	if err := checkGlibcBaseline(manifest.GlibcBaseline); err != nil {
+		return Info{}, err
+	}
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		return Info{}, fmt.Errorf("native cache location: %w", err)
+	}
+	info, err := stageBundle(filepath.Join(cacheRoot, "krunlet", "native"), libName, fwName, lib, fw)
+	if err != nil && allowHost {
+		slog.Warn("unsafe native cache overridden by explicit host fallback", "error", err)
+		return Info{Source: "host", Fallback: true}, nil
+	}
+	info.LibkrunVersion = manifest.LibkrunVersion
+	info.FirmwareVersion = manifest.FirmwareVersion
+	info.GlibcBaseline = manifest.GlibcBaseline
+	return info, err
+}
+
+func sha(b []byte) string {
+	hash := sha256.Sum256(b)
+	return hex.EncodeToString(hash[:])
+}
+
+// stageBundle is deliberately uncached in-process. Every invocation checks
+// integrity, so corrupt files can be repaired even by a long-running daemon.
+func stageBundle(root, libName, fwName string, lib, fw []byte) (Info, error) {
+	info := Info{
+		Source: "embedded", LibrarySHA256: sha(lib), FirmwareSHA256: sha(fw),
+		FirmwareABI: requiredFirmwareABI,
+	}
+	full := sha(append(append([]byte(nil), lib...), fw...))
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return info, fmt.Errorf("create native cache: %w", err)
+	}
+	if err := privateDir(root); err != nil {
+		return info, err
+	}
+	if err := checkExecutableCache(root); err != nil {
+		return info, err
+	}
+	release, err := bundleLock(root)
+	if err != nil {
+		return info, err
+	}
+	defer release()
+
+	target := filepath.Join(root, full)
+	info.Library, info.Firmware = filepath.Join(target, libName), filepath.Join(target, fwName)
+	if _, e := os.Lstat(target); e == nil {
+		// A symlink, a non-private directory or an individual symlink is
+		// suspicious and must not be removed or followed automatically.
+		if e := privateDir(target); e != nil {
+			return info, e
+		}
+		valid, e := verifyPair(info, lib, fw)
+		if e != nil {
+			return info, e
+		}
+		if valid {
+			info.Integrity = true
+			return info, nil
+		}
+		// The old target is unusable. Move it out of the content-addressed
+		// location before installing a fully verified replacement.
+		retired, e := os.MkdirTemp(root, ".retired-")
+		if e != nil {
+			return info, e
+		}
+		if e := os.Remove(retired); e != nil {
+			return info, e
+		}
+		if e := os.Rename(target, retired); e != nil {
+			return info, fmt.Errorf("quarantine corrupt native bundle: %w", e)
+		}
+		defer os.RemoveAll(retired)
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return info, e
+	}
+	stage, err := os.MkdirTemp(root, ".stage-")
+	if err != nil {
+		return info, err
+	}
+	defer os.RemoveAll(stage)
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{{libName, lib}, {fwName, fw}} {
+		p := filepath.Join(stage, f.name)
+		if err := writeVerified(p, f.data); err != nil {
+			return info, err
+		}
+	}
+	if err := syncDir(stage); err != nil {
+		return info, err
+	}
+	if err := os.Rename(stage, target); err != nil {
+		return info, fmt.Errorf("atomically publish native bundle: %w", err)
+	}
+	if err := syncDir(root); err != nil {
+		return info, err
+	}
+	valid, err := verifyPair(info, lib, fw)
+	if err != nil {
+		return info, err
+	}
+	if !valid {
+		return info, errors.New("embedded bundle contents changed during extraction")
+	}
+	info.Integrity = true
+	return info, nil
+}
+
+func writeVerified(path string, expected []byte) error {
+	file, err := openNativeFile(path, true)
+	if err != nil {
+		return err
+	}
+	if _, err = file.Write(expected); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	got, err := readVerifiedFile(path)
+	if err != nil {
+		return err
+	}
+	if sha(got) != sha(expected) {
+		return fmt.Errorf("native bundle write checksum mismatch: %s", path)
+	}
+	return nil
+}
+
+func verifyPair(info Info, lib, fw []byte) (bool, error) {
+	for _, item := range []struct {
+		path string
+		data []byte
+	}{{info.Library, lib}, {info.Firmware, fw}} {
+		got, err := readVerifiedFile(item.path)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCorruptFile) {
+			return false, nil
+		}
 		if err != nil {
-			return "", err
+			return false, err
 		}
-		defer os.RemoveAll(tmp)
-		if err := os.WriteFile(filepath.Join(tmp, libName), lib, 0500); err != nil {
-			return "", err
-		}
-		if err := os.WriteFile(filepath.Join(tmp, fwName), fw, 0500); err != nil {
-			return "", err
-		}
-		if err := os.Rename(tmp, target); err != nil {
-			if _, statErr := os.Lstat(target); statErr != nil {
-				return "", err
-			}
-			// Another process may have installed an identical bundle.
-		}
-	} else if err != nil {
-		return "", err
-	}
-	if err := privateDir(target); err != nil {
-		return "", err
-	}
-	for name, expected := range map[string][]byte{libName: lib, fwName: fw} {
-		p := filepath.Join(target, name)
-		fi, err := os.Lstat(p)
-		if err != nil {
-			return "", err
-		}
-		if !fi.Mode().IsRegular() || fi.Mode().Perm()&0022 != 0 {
-			return "", fmt.Errorf("unsafe cached native library: %s", p)
-		}
-		got, err := os.ReadFile(p)
-		if err != nil {
-			return "", err
-		}
-		if !bytes.Equal(got, expected) {
-			return "", fmt.Errorf("cached native library checksum mismatch: %s (remove corrupt cache)", p)
+		if sha(got) != sha(item.data) {
+			return false, nil
 		}
 	}
-	return filepath.Join(target, libName), nil
+	return true, nil
+}
+
+func readVerifiedFile(path string) ([]byte, error) {
+	file, err := openNativeFile(path, false)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !stat.Mode().IsRegular() || stat.Mode().Perm()&0222 != 0 {
+		return nil, fmt.Errorf("%w: %s: expected read-only regular file", errCorruptFile, path)
+	}
+	if stat.Size() < 1 || stat.Size() > 256<<20 {
+		return nil, fmt.Errorf("invalid native file size: %s", path)
+	}
+	return io.ReadAll(file)
 }
 
 func privateDir(path string) error {
@@ -125,7 +298,19 @@ func privateDir(path string) error {
 		return err
 	}
 	if !fi.IsDir() || fi.Mode().Perm()&0077 != 0 {
-		return fmt.Errorf("unsafe native bundle cache directory: %s (requires private 0700 directory)", path)
+		return fmt.Errorf("unsafe native cache directory %s: expected real directory with 0700 permissions", path)
+	}
+	return nil
+}
+
+func syncDir(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil && !strings.Contains(err.Error(), "invalid argument") {
+		return err
 	}
 	return nil
 }

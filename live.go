@@ -129,14 +129,14 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 			lease.Close()
 		}
 	}()
-	nativeLib, err := nativebundle.Library(cfg.LibraryPath)
+	nativeInfo, err := nativebundle.ResolveWithFallback(cfg.LibraryPath, cfg.AllowHostLibraryFallback)
 	if err != nil {
 		return nil, fmt.Errorf("prepare libkrun: %w", err)
 	}
 	payload := krunffi.Config{RootFS: sess.root, WorkDir: "/", Command: []string{"/bin/sh", "-c", liveDriver},
 		Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LANG=C.UTF-8"},
 		CPUs: cfg.CPUs, MemoryMiB: cfg.MemoryMiB, Network: cfg.Network, Ports: cfg.PortMaps, RLimits: cfg.RLimits,
-		Library: nativeLib, ErrorPath: statusPath, Kernel: ffiKernel(cfg.Kernel), RestrictedNetwork: cfg.NetworkPolicy != nil, NetSocket: lease.socket}
+		Library: nativeInfo.Library, Firmware: nativeInfo.Firmware, ErrorPath: statusPath, Kernel: ffiKernel(cfg.Kernel), RestrictedNetwork: cfg.NetworkPolicy != nil, NetSocket: lease.socket}
 	if err = json.NewEncoder(config).Encode(payload); err != nil {
 		_ = config.Close()
 		return nil, err
