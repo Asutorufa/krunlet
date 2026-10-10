@@ -82,21 +82,121 @@ jobs:
       - name: Govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
+  # Runs on GitHub-hosted Linux. Nested KVM availability is NOT guaranteed
+  # by GitHub; fail loudly rather than passing fake tests or waiting forever
+  # for a nonexistent self-hosted runner.
   vm-integration:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, linux, kvm]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      PKG_CONFIG_PATH: /usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig
+      LD_LIBRARY_PATH: /usr/local/lib64:/usr/local/lib
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Require native virtualization and a trusted test rootfs
+          cache: false
+
+      - name: Verify actual GitHub-hosted KVM capability
         run: |
-          test -r /dev/kvm
-          test -d "${KRUNLET_TEST_ROOTFS:?set KRUNLET_TEST_ROOTFS on the self-hosted runner}"
-      - name: Real VM doctor
-        run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
-      - name: Real VM integration tests (including 32-run stress)
+          set -euo pipefail
+          uname -a
+          if [ ! -c /dev/kvm ]; then
+            echo "::error::GitHub-hosted runner has no /dev/kvm; nested virtualization is not guaranteed by GitHub."
+            exit 1
+          fi
+          sudo test -r /dev/kvm && sudo test -w /dev/kvm
+          # This VM is ephemeral; delegate KVM to the unprivileged test user.
+          sudo chgrp "$(id -gn)" /dev/kvm
+          sudo chmod g+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          test -f /sys/fs/cgroup/cgroup.controllers
+          grep -qw memory /sys/fs/cgroup/cgroup.controllers
+          grep -qw pids /sys/fs/cgroup/cgroup.controllers
+          echo "KVM and cgroup v2 devices exist on this hosted runner"
+
+      - name: Install native build requirements
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y git curl make pkg-config patchelf clang lld             build-essential libc6-dev libelf-dev libssl-dev busybox-static \
+            libclang-dev llvm-dev
+
+      - name: Install pinned libkrunfw guest kernel
+        run: |
+          set -euo pipefail
+          if ! apt-cache show libkrunfw5 >/dev/null 2>&1; then
+            # Official Ubuntu archive package, pinned by version. It is
+            # not available on every Ubuntu runner image series.
+            curl -fL --retry 3 -o "$RUNNER_TEMP/libkrunfw5.deb"               'https://mirrors.edge.kernel.org/ubuntu/pool/universe/libk/libkrunfw/libkrunfw5_5.5.0+ds-1_amd64.deb'
+            curl -fL --retry 3 -o "$RUNNER_TEMP/libkrunfw-dev.deb"               'https://mirrors.edge.kernel.org/ubuntu/pool/universe/libk/libkrunfw/libkrunfw-dev_5.5.0+ds-1_amd64.deb'
+            sudo apt-get install -y "$RUNNER_TEMP/libkrunfw5.deb" "$RUNNER_TEMP/libkrunfw-dev.deb"
+          else
+            sudo apt-get install -y libkrunfw5 libkrunfw-dev
+          fi
+          sudo ldconfig
+
+      - name: Build pinned libkrun 1.19.6 with virtio-net
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.19.6 https://github.com/libkrun/libkrun.git "$RUNNER_TEMP/libkrun"
+          test "$(git -C "$RUNNER_TEMP/libkrun" rev-parse HEAD)" = "227b2de6ed323fe180e02f871c5f325a90c13cc2"
+          make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
+          sudo make -C "$RUNNER_TEMP/libkrun" NET=1 install
+          echo /usr/local/lib64 | sudo tee /etc/ld.so.conf.d/krunlet-ci-libkrun.conf >/dev/null
+          sudo ldconfig
+          test "$(pkg-config --modversion libkrun)" = "1.19.6"
+          ldconfig -p | grep -F libkrun.so.1
+
+      - name: Prepare real guest rootfs and delegated cgroup v2
+        run: |
+          set -euo pipefail
+          guest="$RUNNER_TEMP/krunlet-ci-rootfs"
+          mkdir -p "$guest/bin" "$guest/tmp"
+          cp "$(command -v busybox)" "$guest/bin/busybox"
+          for app in sh true sleep; do ln -s busybox "$guest/bin/$app"; done
+          chmod 1777 "$guest/tmp"
+          echo "KRUNLET_TEST_ROOTFS=$guest" >> "$GITHUB_ENV"
+
+          cg=/sys/fs/cgroup/krunlet-ci
+          sudo mkdir -p "$cg"
+          # Controller availability and delegation are mandatory. If GitHub
+          # does not expose writable cgroup v2 the integration must FAIL.
+          echo '+memory +pids' | sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null
+          echo '+memory +pids' | sudo tee "$cg/cgroup.subtree_control" >/dev/null
+          sudo chown -R "$(id -u):$(id -g)" "$cg"
+          test -w "$cg/cgroup.procs"
+          echo "KRUNLET_TEST_CGROUP_PARENT=$cg" >> "$GITHUB_ENV"
+
+      - name: Real VM doctor (pinned ABI and NET=1)
+        run: |
+          set -euo pipefail
+          # GitHub's hosted VM image restricts /dev/kvm to privileged
+          # processes even when the device node mode looks writable.
+          # Preserve pkg-config + guest paths explicitly through sudo.
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS" > doctor.json
+          python3 - <<'PY'
+          import json
+          with open("doctor.json", encoding="utf-8") as f:
+              doctor = json.load(f)
+          native = doctor["native"] if "native" in doctor else doctor["Native"]
+          assert native["PkgConfigVersion"] == "1.19.6", native
+          assert native["VirtioNET"], "libkrun missing virtio-NET=1 ABI"
+          assert doctor.get("SmokeAttempted", doctor.get("smoke_attempted")), "real VM not booted"
+          assert doctor.get("SmokeExitCode", doctor.get("smoke_exit_code")) == 0
+          PY
+
+      - name: Real VM integration (32 launches, setsid, parent SIGKILL)
         env:
           KRUNLET_STRESS_32: '1'
-        run: CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            "KRUNLET_STRESS_32=$KRUNLET_STRESS_32" \
+            CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...

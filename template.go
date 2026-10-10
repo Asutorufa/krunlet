@@ -27,6 +27,13 @@ func PrepareTemplate(dir string) (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
+	info, err := os.Stat(validated.cfg.RootFS)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return nil, errors.New("template source directory must not be group/other writable")
+	}
 	ctx := context.Background()
 	if err := checkRootFSSize(ctx, validated.cfg.RootFS, validated.cfg.MaxRootFSBytes); err != nil {
 		return nil, err
@@ -59,6 +66,9 @@ func (t *Template) NewRunner(opts Options) (*Runner, error) {
 	defer t.mu.Unlock()
 	if t.closed {
 		return nil, errors.New("template is closed")
+	}
+	if opts.Persistent {
+		return nil, errors.New("persistent mode is forbidden for template runners")
 	}
 	opts.RootFS = t.root
 	opts.Persistent = false // always isolated, even when caller requests otherwise

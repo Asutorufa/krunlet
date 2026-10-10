@@ -38,7 +38,7 @@ func TestNativeMinimalVMBoot(t *testing.T) {
 
 func TestNativeVMTimeoutReapsHelper(t *testing.T) {
 	root := integrationRootFS(t)
-	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, Timeout: 1500 * time.Millisecond})
+	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, CgroupParent: integrationCgroup(t), Timeout: 1500 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +57,10 @@ func TestNative32RunsBounded(t *testing.T) {
 		t.Skip("set KRUNLET_STRESS_32=1 to enable full VM stress")
 	}
 	root := integrationRootFS(t)
+	cgroupParent := integrationCgroup(t)
 	scratch := t.TempDir()
 	t.Setenv("TMPDIR", scratch)
-	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, MaxConcurrentVMs: 4})
+	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, CgroupParent: integrationCgroup(t), MaxConcurrentVMs: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,4 +100,22 @@ func TestNative32RunsBounded(t *testing.T) {
 	if output, err := exec.Command("ps", "-eo", "args").Output(); err == nil && bytes.Contains(output, []byte(scratch)) {
 		t.Fatalf("VM stress left a helper process referencing %s", scratch)
 	}
+	groups, err := os.ReadDir(cgroupParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range groups {
+		if strings.HasPrefix(group.Name(), "krunlet-vm-") {
+			t.Errorf("VM stress left per-VM cgroup: %s", group.Name())
+		}
+	}
+}
+
+func integrationCgroup(t *testing.T) string {
+	t.Helper()
+	parent := os.Getenv("KRUNLET_TEST_CGROUP_PARENT")
+	if parent == "" {
+		t.Fatal("a pre-delegated cgroup v2 parent is required for real VM tests")
+	}
+	return parent
 }

@@ -16,7 +16,8 @@ import (
 	"github.com/Asutorufa/krunlet/internal/krunffi"
 )
 
-const version = "0.2.0-dev"
+// version is stamped by the prebuilt release workflow using -ldflags -X.
+var version = "0.2.0-dev"
 
 type repeated []string
 
@@ -101,6 +102,10 @@ func run() int {
 		maxConcurrent := f.Int("max-concurrent-vms", 0, "per-Runner concurrent VM limit (default min(4,NumCPU/2))")
 		failFast := f.Bool("fail-fast", false, "return ErrTooManyVMs instead of waiting")
 		maxRootFS := f.Int64("max-rootfs-bytes", 1<<30, "logical bytes allowed in staged rootfs")
+		globalLimit := f.Int("global-max-concurrent-vms", 0, "process-wide VM limit (0=default)")
+		cgroupParent := f.String("cgroup-parent", "", "delegated Linux cgroup v2 parent (required for strong host containment)")
+		cgroupMemory := f.Int64("cgroup-memory-max", 0, "host VMM cgroup memory.max (0=guest+256MiB)")
+		cgroupPids := f.Int64("cgroup-pids-max", 0, "host VMM cgroup pids.max (0=256)")
 
 		jsonOut := f.Bool("json", false, "print structured result JSON")
 		var envs, ports, limits, inputFiles, outputFiles, allowCIDRs, blockCIDRs repeated
@@ -228,11 +233,18 @@ func run() int {
 		if *persistent {
 			fmt.Fprintln(os.Stderr, "WARNING: --persistent writes directly into the trusted host rootfs; this is not safe for untrusted commands")
 		}
+		if *globalLimit != 0 {
+			if e := krunlet.SetGlobalVMLimit(*globalLimit); e != nil {
+				fmt.Fprintln(os.Stderr, e)
+				return 2
+			}
+		}
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
 			Kernel: customKernel, NetworkPolicy: networkPolicy,
 			MaxConcurrentVMs: *maxConcurrent, FailFast: *failFast, MaxRootFSBytes: *maxRootFS,
+			CgroupParent: *cgroupParent, CgroupMemoryMaxBytes: *cgroupMemory, CgroupPidsMax: *cgroupPids,
 			Yuhaiin: func() *krunlet.YuhaiinConfig {
 				if *yuhaiin == "" {
 					return nil

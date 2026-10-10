@@ -30,11 +30,36 @@ mount/user namespaces, cgroup v2 limits, seccomp profiles, Linux LSM policy
 or platform equivalents around the helper. Separate the privileged VM
 launcher from untrusted API tenants.
 
-A per-Runner semaphore limits only that Runner's VMs. It is **not** a global
-host quota across distinct Runner instances or processes. `MaxRootFSBytes`
+Krunlet enforces a process-wide semaphore across all Runners, configured
+with `SetGlobalVMLimit`, in addition to each Runner's own cap. The global
+limit is **per OS process**, not across multiple processes or machines.
+For untrusted agents in production on Linux, configure `CgroupParent` to
+a dedicated, pre-delegated cgroup v2 subtree where `memory.max`, `pids.max`
+and `cgroup.kill` are writable. Cgroup setup/attachment errors fail closed,
+and the built-in helper waits for its host cgroup assignment before starting
+libkrun or creating descendants. A per-VM cgroup contains setsid/setpgid
+descendants that stay within the delegated cgroup hierarchy. `MaxRootFSBytes`
 counts logical file bytes at staging time, not all allocated blocks, inodes,
 copy-on-write amplification, or ongoing guest filesystem writes. Put the
 staging directory on a quota-limited filesystem.
+
+**Network service processes are outside the helper's per-VM cgroup.**
+Krunlet's gVisor Netstack gateway executes inside the host-side Runner
+process; a native yuhaiin inbound may execute in a completely separate,
+shared service. `CgroupParent` does **not** bound memory or PID usage of
+those services. For untrusted networking, configure **separate host-service
+cgroup v2 scopes** for the Krunlet caller and yuhaiin daemon, with their own
+`memory.max`, `pids.max`, service-level process supervision and
+restart limits. An externally hosted yuhaiin daemon cannot safely be moved
+into a per-VM cgroup when it serves multiple VMs. Until those service scopes
+are validated, do not treat the overall network stack as bounded isolation.
+
+A per-VM cgroup is not an independent privileged watchdog if the entire
+Krunlet process and its helper are killed before a parent-death watcher can
+execute. Use systemd transient scopes / a separate supervisor with
+`KillMode=control-group` for stronger parent-SIGKILL guarantees. Never
+delegate permission for guest-controlled code to migrate itself out of the
+cgroup. Without `CgroupParent`, only the process-group kill path remains.
 
 A parent-exit watcher protects the **built-in helper** (Linux pidfd plus
 PR_SET_PDEATHSIG; macOS kqueue NOTE_EXIT). A custom `HelperPath` program may
@@ -61,9 +86,17 @@ directory and the principals allowed to open it.
 ## Deployment checklist
 
 1. Run the helper without root privileges, under a dedicated service user.
-2. Mount only a verified, immutable rootfs template into the guest, and never
-   use `/`, the user's home directory or other host resource directories.
-3. Enforce host-level disk/inode/pid/memory limits **outside** Krunlet.
+2. An administrator must prepare and verify the rootfs template in a
+   non-group/world-writable directory, inaccessible for writes to Guest
+   identities. `PrepareTemplate` copies it into a private host snapshot and
+   rejects group/other-writable source directories. A template-based Runner
+   rejects `Persistent=true` (instead of silently accepting it); using
+   `--persistent` directly modifies the host source rootfs and **must never**
+   be allowed for untrusted agent commands. Never use `/` or host home.
+3. Set `CgroupParent` for all untrusted Linux VM runs (admin-created
+   delegated subtree), enforce disk/inode quotas separately, and ensure
+   the parent PID watcher is used. Verify cgroup cleanup and descendant
+   reaping on the actual hypervisor host.
 4. Disable networking unless explicitly required. Prefer allowlist rules.
 5. Run virtualization and network-bypass tests against the exact native
    libkrun/libkrunfw versions on KVM/HVF hosts before exposing to tenants.

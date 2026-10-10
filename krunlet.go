@@ -55,14 +55,21 @@ type Options struct {
 	PortMaps []string
 	// RLimits are Linux rlimit strings like "7=256:256" (RLIMIT_NOFILE).
 	RLimits []string
-	// MaxConcurrentVMs bounds concurrently executing helpers per Runner.
-	// Zero defaults to max(1, min(4, runtime.NumCPU()/2)).
+	// MaxConcurrentVMs bounds concurrent helpers per Runner. The shared
+	// process-wide cap (SetGlobalVMLimit) is enforced in addition to this one.
+	// Zero defaults to max(1,min(4,runtime.NumCPU()/2)).
 	MaxConcurrentVMs int
 	// FailFast rejects a run with ErrTooManyVMs instead of queuing.
 	FailFast bool
 	// MaxRootFSBytes limits logical file bytes in a disposable rootfs.
 	// Zero defaults to 1 GiB.
 	MaxRootFSBytes int64
+	// CgroupParent enables mandatory per-VM Linux cgroup v2 containment,
+	// under a host-admin delegated cgroup (e.g. /sys/fs/cgroup/krunlet).
+	// Requires writable memory/pids controllers and cgroup.kill.
+	CgroupParent         string
+	CgroupMemoryMaxBytes int64 // zero = guest memory + 256 MiB overhead
+	CgroupPidsMax        int64 // zero = 256 host processes/threads
 	// OnStats receives one snapshot for each completed or failed run.
 	// It is invoked after resource cleanup without holding Runner locks.
 	OnStats func(Stats)
@@ -159,6 +166,20 @@ func New(opts Options) (*Runner, error) {
 			opts.MaxConcurrentVMs = 4
 		}
 	}
+	if opts.CgroupMemoryMaxBytes < 0 || opts.CgroupPidsMax < 0 {
+		return nil, errors.New("cgroup limits cannot be negative")
+	}
+	if opts.CgroupParent != "" {
+		if runtime.GOOS != "linux" {
+			return nil, errors.New("cgroup v2 containment requires Linux")
+		}
+		if !filepath.IsAbs(opts.CgroupParent) {
+			return nil, errors.New("cgroup parent path must be absolute")
+		}
+		if opts.CgroupMemoryMaxBytes > 0 && opts.CgroupMemoryMaxBytes < 128<<20 {
+			return nil, errors.New("cgroup memory maximum too small")
+		}
+	}
 	if opts.CPUs > 64 || opts.MemoryMiB < 128 || opts.MemoryMiB > 65536 {
 		return nil, errors.New("CPU or memory limit out of range")
 	}
@@ -169,6 +190,9 @@ func New(opts Options) (*Runner, error) {
 	// re-executes itself and the package init dispatches directly to the helper.
 	// Callers do not need to install the CLI alongside their Go application.
 	autoHelper := opts.HelperPath == ""
+	if !autoHelper && opts.CgroupParent != "" {
+		return nil, errors.New("cgroup containment requires the built-in, startup-gated helper")
+	}
 	if autoHelper {
 		opts.HelperPath, err = os.Executable()
 		if err != nil {
@@ -242,7 +266,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	defer func() {
 		if cb := r.cfg.OnStats; cb != nil {
 			cb(Stats{RunID: runID, ReadyMillis: -1, DurationMillis: time.Since(start).Milliseconds(),
-				ExitCode: result.ExitCode, PeakMemoryMiB: helperPeakMemory(helperState),
+				ExitCode: result.ExitCode, HostHelperPeakRSSMiB: helperPeakMemory(helperState),
 				NetworkPolicy: r.cfg.NetworkPolicy != nil, TimedOut: result.TimedOut})
 		}
 	}()
@@ -397,6 +421,13 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	}
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
 	supervisor := configureHelper(cmd)
+	cg, err := prepareVMCgroup(r.cfg)
+	if err != nil {
+		return result, err
+	}
+	if cg != nil {
+		defer func() { retErr = errors.Join(retErr, cg.Close()) }()
+	}
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)
 	}
@@ -408,7 +439,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	errout := &limitedWriter{budget: combined, mirror: stderr}
 	cmd.Stdout = out
 	cmd.Stderr = errout
-	err = supervisor.start()
+	err = startHelperInCgroup(supervisor, cg)
 	if err != nil {
 		return result, fmt.Errorf("start helper: %w", err)
 	}
