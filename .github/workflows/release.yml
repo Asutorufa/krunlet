@@ -1,77 +1,196 @@
-name: Release
+name: Prebuilt Release
+
 on:
+  pull_request:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  workflow_run:
+    workflows: ['Go']
+    types: [completed]
+    branches: [main]
+
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: prebuilt-release-${{ github.event_name == 'workflow_run' && 'main' || github.event_name == 'push' && github.ref_name || format('pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {goos: linux, goarch: amd64, runner: ubuntu-latest}
-          - {goos: linux, goarch: arm64, runner: ubuntu-latest}
-          - {goos: darwin, goarch: arm64, runner: ubuntu-latest}
-    runs-on: ${{ matrix.runner }}
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: arm64}
+          - {goos: darwin, goarch: arm64}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build
+          cache: false
+      - name: Build self-contained Go CLI (native libkrun installed separately)
+        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
+          RELEASE_EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: |
+          set -euo pipefail
+          if [ "$RELEASE_EVENT" = push ]; then
+            version="$REF_NAME"
+          elif [ "$RELEASE_EVENT" = workflow_run ]; then
+            version="main-${RELEASE_SHA:0:12}"
+          else
+            version="pr-${RELEASE_SHA:0:12}"
+          fi
           mkdir -p dist
-          go build -trimpath -o "dist/krunlet-${GOOS}-${GOARCH}" ./cmd/krunlet
+          target="dist/krunlet-$GOOS-$GOARCH"
+          go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" -o "$target" ./cmd/krunlet
+          test -s "$target"
+          if [ "$GOOS/$GOARCH" = linux/amd64 ]; then
+            test "$("./$target" version)" = "krunlet $version"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: krunlet-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
+          path: dist/krunlet-*
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
+    if: github.event_name != 'pull_request'
     needs: build
-    # Release is blocked on the same real VM smoke + stress as the PR gate.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
+          fetch-tags: true
       - uses: actions/download-artifact@v4
         with:
           pattern: krunlet-*
           path: dist
           merge-multiple: true
-      - name: Verify required real-VM status on the release commit
+      - name: Verify real VM check and current rolling commit
+        id: gate
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
-          checks=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" --jq '.check_runs[] | select(.name == "vm-integration" and .conclusion == "success") | .id')
-          test -n "$checks" || { echo "Refusing release: vm-integration missing/failed"; exit 1; }
-      - name: Changelog and native dependency notice
+          if [ "$RELEASE_EVENT" = workflow_run ]; then
+            head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            if [ "$head" != "$RELEASE_SHA" ]; then
+              echo "Stale main build $RELEASE_SHA; current main is $head"
+              echo 'skip=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          result="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "vm-integration" and .status == "completed" and .conclusion == "success")] | length')"
+          if [ "$result" -lt 1 ]; then
+            echo "::error::Cannot publish $RELEASE_SHA: real vm-integration is missing or failed"
+            exit 1
+          fi
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble binaries, install script, checksums and changelog
+        if: steps.gate.outputs.skip != 'true'
+        shell: bash
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_SHA: ${{ steps.gate.outputs.sha }}
         run: |
-          previous=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          set -euo pipefail
+          test -f dist/krunlet-linux-amd64
+          test -f dist/krunlet-linux-arm64
+          test -f dist/krunlet-darwin-arm64
+          mkdir -p release
+          cp dist/krunlet-* release/
+          cp install.sh release/install.sh
+          (cd release && sha256sum krunlet-* install.sh | sort -k2) > release/checksums.txt
+
           {
-            echo '## Changes'
-            if [ -n "$previous" ]; then
-              git log "$previous..HEAD" --pretty='- %s (%h)'
+            echo "## Changes"
+            if [ "$RELEASE_EVENT" = workflow_run ]; then
+              git log -20 --pretty='- %s (%h)' "$RELEASE_SHA"
             else
-              git log HEAD --pretty='- %s (%h)'
+              previous="$(git describe --tags --match 'v*' --abbrev=0 "$RELEASE_SHA^" 2>/dev/null || true)"
+              if [ -n "$previous" ]; then
+                git log --pretty='- %s (%h)' "$previous..$RELEASE_SHA"
+              else
+                git log -20 --pretty='- %s (%h)' "$RELEASE_SHA"
+              fi
             fi
             echo
-            echo '## Native runtime requirements'
-            echo '- libkrun **1.19.6** (upstream tag v1.19.6, commit 227b2de6ed323fe180e02f871c5f325a90c13cc2) (NOT libkrun 2.x).'
-            echo '- libkrunfw required unless a custom trusted kernel is selected.'
-            echo '- For gVisor virtio-net or yuhaiin ingress: build libkrun with **NET=1**.'
-            echo '- Verify the host using `krunlet doctor --rootfs /trusted/rootfs` and check the `native.symbols` JSON.'
-            echo '- Experimental: end-to-end KVM/HVF security isolation has not been certified.'
+            echo "## Prebuilt CLI"
+            echo '- Linux amd64 / arm64, macOS Apple Silicon arm64.'
+            echo '- Go binaries are built with CGO_ENABLED=0; the libkrun native runtime is NOT bundled.'
+            echo '- Runtime ABI: libkrun **1.19.6**, upstream v1.19.6 commit 227b2de6ed323fe180e02f871c5f325a90c13cc2.'
+            echo '- Provide compatible libkrunfw, or supply a trusted custom kernel.'
+            echo '- For gVisor Netstack and yuhaiin ingress, libkrun must be compiled with NET=1.'
+            echo '- Check native dependencies: krunlet doctor --rootfs /trusted/rootfs.'
+            echo '- Verify asset integrity using checksums.txt (SHA-256).'
+            echo '- Security isolation is experimental and depends on host-level virtualization, process and service cgroups.'
           } > release-notes.md
-          sha256sum dist/* > checksums.txt
-      - name: Publish GitHub Release
+
+      - name: Update rolling main tag
+        if: steps.gate.outputs.skip != 'true' && github.event_name == 'workflow_run'
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f main "$RELEASE_SHA"
+          git push origin refs/tags/main --force
+
+      - name: Publish prebuilt binaries and checksums
+        if: steps.gate.outputs.skip != 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* checksums.txt --notes-file release-notes.md --verify-tag
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_SHA: ${{ steps.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_EVENT" = workflow_run ]; then
+            if gh release view main >/dev/null 2>&1; then
+              gh release edit main --prerelease --latest=false --notes-file release-notes.md
+              gh release upload main release/* --clobber
+            else
+              gh release create main release/* --target "$RELEASE_SHA" \
+                --prerelease --latest=false --notes-file release-notes.md
+            fi
+          else
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file release-notes.md
+              gh release upload "$GITHUB_REF_NAME" release/* --clobber
+            else
+              gh release create "$GITHUB_REF_NAME" release/* --verify-tag --notes-file release-notes.md
+            fi
+          fi
