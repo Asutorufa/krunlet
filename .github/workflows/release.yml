@@ -236,9 +236,80 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+
+  vm-embedded-smoke:
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: krunlet-linux-amd64
+          path: dist
+      - name: Prove VM runs with embedded libraries in a clean runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm || { echo "::error::KVM is mandatory for clean embedded smoke"; exit 1; }
+          chmod +x dist/krunlet-linux-amd64
+          sudo apt-get update -y
+          sudo apt-get install -y busybox-static
+          guest="$RUNNER_TEMP/guest-rootfs"
+          mkdir -p "$guest/bin" "$guest/tmp"
+          chmod 1777 "$guest/tmp"
+          cp "$(command -v busybox)" "$guest/bin/busybox"
+          ln -s busybox "$guest/bin/true"
+          mkdir -p "$RUNNER_TEMP/clean-cache" "$RUNNER_TEMP/fake-cache" "$RUNNER_TEMP/fake-host" "$RUNNER_TEMP/proof"
+          printf 'incorrect-native-library\n' > "$RUNNER_TEMP/fake-host/libkrun.so.1"
+          printf 'incorrect-firmware\n' > "$RUNNER_TEMP/fake-host/libkrunfw.so.5"
+          # ubuntu:24.04 does not contain a libkrun/libkrunfw package.
+          # Install only other dynamically-linked host runtime prerequisites.
+          for mode in clean fake; do
+            if [ "$mode" = clean ]; then
+              cache="$RUNNER_TEMP/clean-cache"
+              fake_env=
+            else
+              cache="$RUNNER_TEMP/fake-cache"
+              fake_env="-e LD_LIBRARY_PATH=/fake-host"
+            fi
+            sudo docker run --rm --privileged --device=/dev/kvm \
+              --mount "type=bind,src=$PWD/dist/krunlet-linux-amd64,dst=/usr/local/bin/krunlet,readonly" \
+              --mount "type=bind,src=$guest,dst=/guest,readonly" \
+              --mount "type=bind,src=$cache,dst=/cache" \
+              --mount "type=bind,src=$RUNNER_TEMP/fake-host,dst=/fake-host,readonly" \
+              --mount "type=bind,src=$RUNNER_TEMP/proof,dst=/proof" \
+              -e XDG_CACHE_HOME=/cache $fake_env ubuntu:24.04 \
+              /bin/bash -c "set -euo pipefail;
+                if ldconfig -p | grep -E 'libkrun(fw)?[.]'; then echo 'unexpected system libkrun installed'; exit 1; fi;
+                apt-get update -qq >/dev/null;
+                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libssl3t64 libelf1t64 libzstd1 liblzma5 >/dev/null;
+                /usr/local/bin/krunlet doctor --rootfs /guest > /proof/$mode.json"
+          done
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          for mode in ("clean", "fake"):
+              report=json.load(open(os.environ["RUNNER_TEMP"]+"/proof/"+mode+".json"))
+              info=report["native_bundle"]
+              assert info["source"]=="embedded", info
+              assert info["integrity"], info
+              lib=pathlib.Path(info["library"])
+              fw=pathlib.Path(info["firmware"])
+              assert lib.is_absolute() and fw.is_absolute()
+              assert str(lib).startswith("/cache/krunlet/native/"), lib
+              assert lib.name=="libkrun.so.1" and fw.name=="libkrunfw.so.5", info
+              assert info["firmware_abi"]==5, info
+              assert report["smoke_attempted"] and report["smoke_exit_code"]==0, report
+              host_cache=pathlib.Path(os.environ["RUNNER_TEMP"]+("/clean-cache" if mode=="clean" else "/fake-cache"))
+              for name,key in ((lib.name,"library_sha256"),(fw.name,"firmware_sha256")):
+                  actual=host_cache / lib.relative_to("/cache/") .parent / name
+                  assert actual.is_file(), actual
+                  assert hashlib.sha256(actual.read_bytes()).hexdigest()==info[key], (actual,info[key])
+          print("Embedded native pair booted in clean and fake-host KVM containers; absolute paths and hashes match")
+          PY
+
   publish:
     if: github.event_name != 'pull_request'
-    needs: build
+    needs: [build, vm-embedded-smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
