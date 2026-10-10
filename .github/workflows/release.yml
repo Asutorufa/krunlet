@@ -43,6 +43,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Check install script syntax
+        shell: bash
+        run: bash -n install.sh
       - name: Build self-contained Go CLI (native libkrun installed separately)
         shell: bash
         env:
