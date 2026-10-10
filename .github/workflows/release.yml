@@ -85,8 +85,9 @@ jobs:
           set -euo pipefail
           brew tap libkrun/krun
           brew trust libkrun/krun
-          brew install libkrunfw lld xz
+          brew install libkrunfw lld llvm xz
           test -f "$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
+          test -f "$(brew --prefix llvm)/lib/libclang.dylib"
       - name: Build pinned libkrun with NET=1 and stage relocatable bundle
         shell: bash
         env:
@@ -113,7 +114,14 @@ jobs:
             ldd "$stage/libkrun.so.1" | tee "$RUNNER_TEMP/native-ldd.txt"
             ! grep -q 'not found' "$RUNNER_TEMP/native-ldd.txt"
           else
+            llvm_lib="$(brew --prefix llvm)/lib"
+            # bindgen's build-script executable dynamically loads libclang;
+            # Xcode's clang executable alone does not make the dylib visible
+            # to dyld on GitHub-hosted ARM64 runners.
+            export LIBCLANG_PATH="$llvm_lib"
+            export DYLD_LIBRARY_PATH="$llvm_lib:${DYLD_LIBRARY_PATH:-}"
             export PKG_CONFIG_PATH="$(brew --prefix libkrunfw)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            test -f "$LIBCLANG_PATH/libclang.dylib"
             make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
             lib="$RUNNER_TEMP/libkrun/target/release/libkrun.1.19.6.dylib"
             fw="$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
