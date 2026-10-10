@@ -480,9 +480,15 @@ libkrun version (which may not match a manually specified library), host
 /dev/kvm accessibility on Linux, separately loadable libkrunfw status,
 and real smoke boot duration/exit code when `--rootfs` is given.
 For a real VM, use libkrun **1.19.6**; NET=1 is needed for gVisor networking.
-The required VM integration job runs on every PR/main push using self-hosted KVM; without a matching runner it remains queued rather than passing. GitHub branch rules must explicitly require this job. Ordinary GitHub-hosted runners cannot replace real KVM tests;
-the opt-in `vm-integration` workflow job targets a self-hosted runner with
-the `kvm` label and `KRUNLET_TEST_ROOTFS` configured.
+The required `vm-integration` job runs on every PR/main push using
+GitHub-hosted `ubuntu-26.04`. It probes real /dev/kvm access, configures
+cgroup v2, builds pinned libkrun 1.19.6 with NET=1, and runs real VM
+smoke/orphan/32-run stress tests. GitHub does **not guarantee nested
+virtualization** on hosted runners, so missing host capabilities fail the
+job rather than silently skipping VM tests. A dedicated self-hosted KVM
+runner remains a fallback if GitHub's hosted image proves unsuitable.
+GitHub branch rules must explicitly require this job; see
+[the KVM runner guide](.github/KVM_RUNNER.md).
 
 ### CI and releases
 
