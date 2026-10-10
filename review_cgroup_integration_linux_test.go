@@ -74,7 +74,9 @@ if group not in membership:
 
 func TestReviewRealHostCgroupOOMIsDistinguishable(t *testing.T) {
 	cg, err := prepareVMCgroup(Options{CgroupParent: integrationCgroup(t), MemoryMiB: 256, CgroupMemoryMaxBytes: 128 << 20})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cg.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -88,11 +90,15 @@ print("unexpected: 512 MiB allocation survived 128 MiB memory.max", flush=True)
 	cmd.Env = append(cmd.Env, "KRUNLET_EXPECT_CGROUP="+filepath.Base(cg.path))
 	var stderr, stdout bytes.Buffer
 	cmd.Stderr, cmd.Stdout = &stderr, &stdout
-	if err := startHelperInCgroup(sup, cg); err != nil { t.Fatal(err) }
+	if err := startHelperInCgroup(sup, cg); err != nil {
+		t.Fatal(err)
+	}
 	waitErr := cmd.Wait()
 	sup.finish()
 	usage, err := cg.usage()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !usage.OOMKilled || usage.MemoryPeakBytes == nil || *usage.MemoryPeakBytes == 0 {
 		t.Fatalf("missing real cgroup OOM: wait=%v peak=%v events=%+v stderr=%q stdout=%q", waitErr, usage.MemoryPeakBytes, usage, stderr.String(), stdout.String())
 	}
@@ -100,7 +106,9 @@ print("unexpected: 512 MiB allocation survived 128 MiB memory.max", flush=True)
 
 func TestReviewRealHostPidsMaxIsDistinguishable(t *testing.T) {
 	cg, err := prepareVMCgroup(Options{CgroupParent: integrationCgroup(t), MemoryMiB: 256, CgroupPidsMax: 32})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cg.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -117,11 +125,15 @@ for child in children: child.wait()
 	cmd.Env = append(cmd.Env, "KRUNLET_EXPECT_CGROUP="+filepath.Base(cg.path))
 	var stderr, stdout bytes.Buffer
 	cmd.Stderr, cmd.Stdout = &stderr, &stdout
-	if err := startHelperInCgroup(sup, cg); err != nil { t.Fatal(err) }
+	if err := startHelperInCgroup(sup, cg); err != nil {
+		t.Fatal(err)
+	}
 	waitErr := cmd.Wait()
 	sup.finish()
 	usage, err := cg.usage()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !usage.PidsLimited {
 		t.Fatalf("missing real pids.max event: wait=%v events=%+v stderr=%q stdout=%q", waitErr, usage, stderr.String(), stdout.String())
 	}
