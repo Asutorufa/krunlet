@@ -111,6 +111,10 @@ func ResolveWithFallback(explicit string, allowHost bool) (Info, error) {
 		return Info{}, fmt.Errorf("invalid embedded native manifest: %w", err)
 	}
 	if manifest.LibkrunVersion != "1.19.6" || manifest.LibrarySHA256 != sha(lib) || manifest.FirmwareSHA256 != sha(fw) {
+		if allowHost {
+			slog.Warn("embedded native manifest mismatch; explicitly allowing host library fallback")
+			return Info{Source: "host", Fallback: true}, nil
+		}
 		return Info{}, fmt.Errorf("embedded native manifest does not match libraries or pinned libkrun 1.19.6")
 	}
 	if err := checkGlibcBaseline(manifest.GlibcBaseline); err != nil {

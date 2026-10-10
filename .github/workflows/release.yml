@@ -371,7 +371,7 @@ jobs:
           cp cmd/krunlet/legal/LGPL-2.1-only.txt release/
           cp cmd/krunlet/legal/GPL-2.0-only.txt release/
           cp cmd/krunlet/legal/SOURCES.md release/NATIVE-SOURCES.md
-          (cd release && sha256sum krunlet-* native-manifest-* install.sh *.txt NATIVE-SOURCES.md | sort -k2) > release/checksums.txt
+          (cd release && sha256sum krunlet-* native-manifest-* install.sh Apache-2.0.txt LGPL-2.1-only.txt GPL-2.0-only.txt size-*.txt NATIVE-SOURCES.md | sort -k2) > release/checksums.txt
 
           {
             echo "## Changes"
