@@ -43,6 +43,17 @@ counts logical file bytes at staging time, not all allocated blocks, inodes,
 copy-on-write amplification, or ongoing guest filesystem writes. Put the
 staging directory on a quota-limited filesystem.
 
+**Network service processes are outside the helper's per-VM cgroup.**
+Krunlet's gVisor Netstack gateway executes inside the host-side Runner
+process; a native yuhaiin inbound may execute in a completely separate,
+shared service. `CgroupParent` does **not** bound memory or PID usage of
+those services. For untrusted networking, configure **separate host-service
+cgroup v2 scopes** for the Krunlet caller and yuhaiin daemon, with their own
+`memory.max`, `pids.max`, service-level process supervision and
+restart limits. An externally hosted yuhaiin daemon cannot safely be moved
+into a per-VM cgroup when it serves multiple VMs. Until those service scopes
+are validated, do not treat the overall network stack as bounded isolation.
+
 A per-VM cgroup is not an independent privileged watchdog if the entire
 Krunlet process and its helper are killed before a parent-death watcher can
 execute. Use systemd transient scopes / a separate supervisor with

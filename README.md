@@ -671,6 +671,11 @@ v2 is Linux-only. See SECURITY.md for supervision limits.
 staging. `Stats.HostHelperPeakRSSMiB` is the host helper RSS, **not guest
 memory usage**.
 
+**The helper cgroup does not enclose the gVisor gateway or the yuhaiin
+service.** Both remain independently running host components and require
+administrator-managed memory/pid quotas in their own service cgroups,
+especially when the Guest is untrusted. See SECURITY.md.
+
 The v0.1.0 release requires a successful `vm-integration` check on the
 release commit with libkrun **1.19.6** exactly, including the 32-real-VM
 stress scenario, process inspection, and cgroup enforcement. The release
