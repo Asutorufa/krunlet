@@ -34,6 +34,7 @@ jobs:
           path: dist/*
   publish:
     needs: build
+    # Release is blocked on the same real VM smoke + stress as the PR gate.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +45,13 @@ jobs:
           pattern: krunlet-*
           path: dist
           merge-multiple: true
+      - name: Verify required real-VM status on the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          checks=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" --jq '.check_runs[] | select(.name == "vm-integration" and .conclusion == "success") | .id')
+          test -n "$checks" || { echo "Refusing release: vm-integration missing/failed"; exit 1; }
       - name: Changelog and native dependency notice
         run: |
           previous=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
@@ -56,7 +64,7 @@ jobs:
             fi
             echo
             echo '## Native runtime requirements'
-            echo '- libkrun **1.19.x** (NOT libkrun 2.x).'
+            echo '- libkrun **1.19.6** (upstream tag v1.19.6, commit 227b2de6ed323fe180e02f871c5f325a90c13cc2) (NOT libkrun 2.x).'
             echo '- libkrunfw required unless a custom trusted kernel is selected.'
             echo '- For gVisor virtio-net or yuhaiin ingress: build libkrun with **NET=1**.'
             echo '- Verify the host using `krunlet doctor --rootfs /trusted/rootfs` and check the `native.symbols` JSON.'

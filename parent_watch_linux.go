@@ -58,6 +58,7 @@ func watchHelperParent() error {
 }
 
 func killOrphanGroup() {
+	killOwnCgroup()
 	_ = syscall.Kill(-syscall.Getpgrp(), syscall.SIGKILL)
 	_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 }

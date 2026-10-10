@@ -82,18 +82,27 @@ jobs:
       - name: Govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
+  # REQUIRED on every PR and main push: a missing KVM runner means queued,
+  # not a fake green check from a hosted runner. Configure required check
+  # vm-integration in branch protection/rulesets as an admin.
   vm-integration:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, linux, kvm]
+    runs-on: [self-hosted, linux, kvm, krunlet-vm]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Require native virtualization and a trusted test rootfs
+      - name: Require native virtualization, pinned libkrun and cgroup v2
         run: |
+          set -euo pipefail
           test -r /dev/kvm
           test -d "${KRUNLET_TEST_ROOTFS:?set KRUNLET_TEST_ROOTFS on the self-hosted runner}"
+          test -d "${KRUNLET_TEST_CGROUP_PARENT:?delegate a cgroup v2 parent for the test runner}"
+          test -w "$KRUNLET_TEST_CGROUP_PARENT"
+          test "$(pkg-config --modversion libkrun)" = "1.19.6"
+          test -e "$KRUNLET_TEST_CGROUP_PARENT/cgroup.controllers"
+          grep -qw memory "$KRUNLET_TEST_CGROUP_PARENT/cgroup.controllers"
+          grep -qw pids "$KRUNLET_TEST_CGROUP_PARENT/cgroup.controllers"
       - name: Real VM doctor
         run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
       - name: Real VM integration tests (including 32-run stress)

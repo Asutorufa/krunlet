@@ -15,7 +15,7 @@
 
 **You do not put `libkrun.so` inside your Go module or inside the guest rootfs.**
 The `krunlet` helper runs on the **host** and calls `purego.Dlopen` at runtime.
-The host needs a native libkrun **1.19.x** shared library, its dependencies,
+The host needs a native libkrun **1.19.6** shared library, its dependencies,
 and, for the default kernel, `libkrunfw` (the guest kernel payload).
 Compiling Krunlet with `CGO_ENABLED=0` only removes the Go/C build dependency;
 it does **not** bundle these native libraries or the firmware.
@@ -428,7 +428,7 @@ runner, err := krunlet.New(krunlet.Options{
     OnStats: func(stats krunlet.Stats) {
         slog.Info("vm completion", "run_id", stats.RunID,
             "exit_code", stats.ExitCode, "ready_ms", stats.ReadyMillis,
-            "helper_peak_rss_mib", stats.PeakMemoryMiB)
+            "helper_peak_rss_mib", stats.HostHelperPeakRSSMiB)
     },
 })
 ```
@@ -479,8 +479,8 @@ Doctor outputs JSON including native ABI symbols, pkg-config's detected
 libkrun version (which may not match a manually specified library), host
 /dev/kvm accessibility on Linux, separately loadable libkrunfw status,
 and real smoke boot duration/exit code when `--rootfs` is given.
-For a real VM, use libkrun **1.19.x**; NET=1 is needed for gVisor networking.
-The ordinary GitHub-hosted runners generally cannot run native KVM tests;
+For a real VM, use libkrun **1.19.6**; NET=1 is needed for gVisor networking.
+The required VM integration job runs on every PR/main push using self-hosted KVM; without a matching runner it remains queued rather than passing. GitHub branch rules must explicitly require this job. Ordinary GitHub-hosted runners cannot replace real KVM tests;
 the opt-in `vm-integration` workflow job targets a self-hosted runner with
 the `kvm` label and `KRUNLET_TEST_ROOTFS` configured.
 
@@ -637,3 +637,41 @@ filesystem-persistent session (each call still starts its own VM). A nil
 reader falls back to `Request.Stdin`. If a provided reader blocks forever,
 cancellation terminates the helper; the OS-level read itself may continue
 until the reader unblocks, so use context-aware input sources when possible.
+
+
+### Linux host cgroup containment and global concurrency
+
+`SetGlobalVMLimit(n)` configures one shared process-wide semaphore across
+all Runner/Session/VM instances. The default is `max(1,min(4,NumCPU/2))`;
+each Runner's `MaxConcurrentVMs` provides a stricter local cap.
+
+For untrusted commands with host-side network services, configure an
+administrator-delegated writable cgroup v2 parent (`memory` and `pids`
+controllers, `cgroup.kill`):
+
+```go
+if err := krunlet.SetGlobalVMLimit(4); err != nil { return err }
+runner, err := krunlet.New(krunlet.Options{
+    RootFS: "/srv/krunlet/templates/base",
+    CgroupParent: "/sys/fs/cgroup/krunlet",
+    CgroupMemoryMaxBytes: 1024 << 20,
+    CgroupPidsMax: 256,
+})
+```
+
+Krunlet creates one cgroup per VM. The built-in helper is blocked by a
+startup pipe until assigned to its cgroup; failed setup does not fall back
+to an unrestricted launch. Custom helpers are rejected in cgroup mode.
+The cgroup restricts **host helper processes**, not directly the guest
+kernel's own task count. On macOS use the platform process monitor; cgroup
+v2 is Linux-only. See SECURITY.md for supervision limits.
+
+`Stats.ReadyMillis` is startup-to-VM-ready (persistent VM only);
+`Stats.DurationMillis` is total run elapsed time, including admission and
+staging. `Stats.HostHelperPeakRSSMiB` is the host helper RSS, **not guest
+memory usage**.
+
+The v0.1.0 release requires a successful `vm-integration` check on the
+release commit with libkrun **1.19.6** exactly, including the 32-real-VM
+stress scenario, process inspection, and cgroup enforcement. The release
+workflow does not substitute fake runs for this check.

@@ -8,16 +8,17 @@ import (
 	"time"
 )
 
-// Stats describes an individual VM command. PeakMemoryMiB is the *host
-// helper's* max resident set size from wait4/Getrusage, NOT a measure of
-// guest allocated RAM. ReadyMillis is -1 when the one-shot helper has no
-// explicit guest-ready frame. No Prometheus dependency is required.
+// Stats describes a VM command. HostHelperPeakRSSMiB is the host helper's
+// high-water resident set size, NEVER guest allocated memory. ReadyMillis
+// measures helper startup to VM-ready; -1 means no ready signal exists
+// (currently one-shot runs). DurationMillis measures the entire command
+// including admission, cloning, and cleanup. No Prometheus dependency.
 type Stats struct {
 	RunID          string
 	ReadyMillis    int64
 	DurationMillis int64
 	ExitCode       int
-	PeakMemoryMiB  float64
+	HostHelperPeakRSSMiB float64
 	NetworkPolicy  bool
 	TimedOut       bool
 }

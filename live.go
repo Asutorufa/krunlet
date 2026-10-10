@@ -47,6 +47,7 @@ type VM struct {
 	closed         bool
 	supervisor     *helperSupervisor
 	quotaRunner    *Runner
+	cgroup         *vmCgroup
 	readyMillis    int64
 	waitDone       chan struct{}
 	waitErr        error
@@ -145,6 +146,9 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	vmCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
 	supervisor := configureHelper(cmd)
+	cg, err := prepareVMCgroup(cfg)
+	if err != nil {cancel();return nil,err}
+	defer func() { if err!=nil && cg!=nil { _=cg.Close() } }()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -165,9 +169,9 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
-		supervisor: supervisor, quotaRunner: sess.runner, waitDone: make(chan struct{})}
+		supervisor: supervisor, quotaRunner: sess.runner, cgroup: cg, waitDone: make(chan struct{})}
 	startBoot := time.Now()
-	if err = supervisor.start(); err != nil {
+	if err = startHelperInCgroup(supervisor,cg); err != nil {
 		cancel()
 		_ = stdin.Close()
 		return nil, fmt.Errorf("start VM helper: %w", err)
@@ -258,7 +262,7 @@ func (v *VM) Run(ctx context.Context, req Request) (res Result, runErr error) {
 		v.mu.Unlock()
 		if callback != nil {
 			callback(Stats{RunID: runID, ReadyMillis: v.readyMillis, DurationMillis: time.Since(start).Milliseconds(),
-				ExitCode: res.ExitCode, PeakMemoryMiB: 0, NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
+				ExitCode: res.ExitCode, HostHelperPeakRSSMiB: 0, NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
 		}
 	}()
 	res = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
@@ -490,6 +494,10 @@ func (v *VM) Close() error {
 	v.closed = true
 	_ = v.stdin.Close()
 	<-v.waitDone
+	if v.cgroup != nil {
+		_ = v.cgroup.Close()
+		v.cgroup = nil
+	}
 	if v.networkCleanup != nil {
 		v.networkCleanup.Close()
 		v.networkCleanup = nil

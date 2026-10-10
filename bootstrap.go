@@ -24,6 +24,7 @@ func init() {
 }
 
 func runSelfHelper(configPath string) error {
+	if err:=waitCgroupStartupGate();err!=nil{return err}
 	if err := watchHelperParent(); err != nil {
 		return err
 	}
