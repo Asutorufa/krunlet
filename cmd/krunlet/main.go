@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"github.com/Asutorufa/krunlet"
 	"github.com/Asutorufa/krunlet/internal/krunffi"
 )
+
+//go:embed legal/*
+var legalTexts embed.FS
 
 // version is stamped by the prebuilt release workflow using -ldflags -X.
 var version = "0.2.0-dev"
@@ -73,6 +77,16 @@ func run() int {
 		if e != nil {
 			fmt.Fprintln(os.Stderr, "not ready:", e)
 			return 1
+		}
+		return 0
+	case "licenses":
+		for _, name := range []string{"Apache-2.0.txt", "LGPL-2.1-only.txt", "GPL-2.0-only.txt"} {
+			f, err := legalTexts.Open("legal/" + name)
+			if err != nil { fmt.Fprintln(os.Stderr, err); return 1 }
+			fmt.Fprintln(os.Stdout, "\n===== "+name+" =====\n")
+			_, err = io.Copy(os.Stdout, f)
+			_ = f.Close()
+			if err != nil { fmt.Fprintln(os.Stderr, err); return 1 }
 		}
 		return 0
 	case "version":
@@ -304,7 +318,7 @@ func readLimited(path string, limit int64) ([]byte, error) {
 	return data, e
 }
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage: krunlet run --rootfs DIR [flags] -- /bin/sh -lc 'echo hello' | doctor | version")
+	fmt.Fprintln(os.Stderr, "Usage: krunlet run --rootfs DIR [flags] -- /bin/sh -lc 'echo hello' | doctor | version | licenses")
 }
 
 func parseNetworkRule(spec string) (krunlet.NetworkRule, error) {
