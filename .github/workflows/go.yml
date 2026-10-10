@@ -69,13 +69,17 @@ jobs:
 
   vulncheck:
     runs-on: ubuntu-latest
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.9'
+          cache: false
       - name: Govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   vm-integration:
     if: github.event_name == 'workflow_dispatch'
