@@ -5,8 +5,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -162,15 +162,25 @@ func TestConcurrentProcessesSingleCache(t *testing.T) {
 }
 
 func TestNoExecLocationReportsReadableError(t *testing.T) {
-	if runtime.GOOS != "linux" { t.Skip("Linux mount test") }
-	if _, err := os.Stat("/dev/shm"); err != nil { t.Skip(err) }
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux mount test")
+	}
+	if _, err := os.Stat("/dev/shm"); err != nil {
+		t.Skip(err)
+	}
 	err := checkExecutableCache("/dev/shm")
-	if err == nil { t.Skip("/dev/shm is executable on this host") }
-	if !strings.Contains(err.Error(), "noexec") { t.Fatalf("unexpected noexec error: %v", err) }
+	if err == nil {
+		t.Skip("/dev/shm is executable on this host")
+	}
+	if !strings.Contains(err.Error(), "noexec") {
+		t.Fatalf("unexpected noexec error: %v", err)
+	}
 }
 
 func TestGlibcFloorHumanReadable(t *testing.T) {
-	if runtime.GOOS != "linux" { t.Skip("glibc only") }
+	if runtime.GOOS != "linux" {
+		t.Skip("glibc only")
+	}
 	err := checkGlibcBaseline("999.0")
 	if err == nil || !strings.Contains(err.Error(), "glibc") || !strings.Contains(err.Error(), "999.0") {
 		t.Fatalf("missing readable old-glibc error: %v", err)

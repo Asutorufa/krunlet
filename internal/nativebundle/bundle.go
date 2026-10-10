@@ -4,8 +4,8 @@ package nativebundle
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,14 +29,14 @@ func ValidateABI(actual int) error { return checkABI(requiredFirmwareABI, actual
 // Info describes the selected native runtime. A verified path always refers
 // to the exact embedded bytes, even if a system library has the same name.
 type Info struct {
-	Source         string `json:"source"`
-	Library        string `json:"library"`
-	Firmware       string `json:"firmware,omitempty"`
-	LibrarySHA256  string `json:"library_sha256,omitempty"`
-	FirmwareSHA256 string `json:"firmware_sha256,omitempty"`
-	Integrity      bool   `json:"integrity"`
-	FirmwareABI    int    `json:"firmware_abi,omitempty"`
-	Fallback       bool   `json:"fallback,omitempty"`
+	Source          string `json:"source"`
+	Library         string `json:"library"`
+	Firmware        string `json:"firmware,omitempty"`
+	LibrarySHA256   string `json:"library_sha256,omitempty"`
+	FirmwareSHA256  string `json:"firmware_sha256,omitempty"`
+	Integrity       bool   `json:"integrity"`
+	FirmwareABI     int    `json:"firmware_abi,omitempty"`
+	Fallback        bool   `json:"fallback,omitempty"`
 	LibkrunVersion  string `json:"libkrun_version,omitempty"`
 	FirmwareVersion string `json:"firmware_version,omitempty"`
 	GlibcBaseline   string `json:"glibc_baseline,omitempty"`
@@ -97,11 +97,11 @@ func ResolveWithFallback(explicit string, allowHost bool) (Info, error) {
 		return Info{}, fmt.Errorf("embedded native runtime is incomplete (%s: %v, %s: %v); refusing host fallback", libName, libErr, fwName, fwErr)
 	}
 	var manifest struct {
-		LibkrunVersion string `json:"libkrun_version"`
+		LibkrunVersion  string `json:"libkrun_version"`
 		FirmwareVersion string `json:"firmware_version"`
-		GlibcBaseline string `json:"glibc_baseline"`
-		LibrarySHA256 string `json:"libkrun_sha256"`
-		FirmwareSHA256 string `json:"libkrunfw_sha256"`
+		GlibcBaseline   string `json:"glibc_baseline"`
+		LibrarySHA256   string `json:"libkrun_sha256"`
+		FirmwareSHA256  string `json:"libkrunfw_sha256"`
 	}
 	b, err := assetRead("assets/manifest.json")
 	if err != nil {

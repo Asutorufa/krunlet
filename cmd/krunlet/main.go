@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"embed"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -82,11 +82,17 @@ func run() int {
 	case "licenses":
 		for _, name := range []string{"Apache-2.0.txt", "LGPL-2.1-only.txt", "GPL-2.0-only.txt"} {
 			f, err := legalTexts.Open("legal/" + name)
-			if err != nil { fmt.Fprintln(os.Stderr, err); return 1 }
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
 			fmt.Fprintln(os.Stdout, "\n===== "+name+" =====\n")
 			_, err = io.Copy(os.Stdout, f)
 			_ = f.Close()
-			if err != nil { fmt.Fprintln(os.Stderr, err); return 1 }
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
 		}
 		return 0
 	case "version":

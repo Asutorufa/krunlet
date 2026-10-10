@@ -33,16 +33,24 @@ func TestLicensesCLIContainsCompleteTerms(t *testing.T) {
 	beforeArgs, beforeOut := os.Args, os.Stdout
 	defer func() { os.Args, os.Stdout = beforeArgs, beforeOut }()
 	reader, writer, err := os.Pipe()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	os.Stdout = writer
 	os.Args = []string{"krunlet", "licenses"}
 	status := run()
 	_ = writer.Close()
 	result, err := io.ReadAll(reader)
 	_ = reader.Close()
-	if err != nil { t.Fatal(err) }
-	if status != 0 { t.Fatalf("licenses exited %d", status) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 0 {
+		t.Fatalf("licenses exited %d", status)
+	}
 	for _, fragment := range []string{"Apache License", "GNU LESSER GENERAL PUBLIC LICENSE", "GNU GENERAL PUBLIC LICENSE"} {
-		if !strings.Contains(string(result), fragment) { t.Fatalf("missing %s", fragment) }
+		if !strings.Contains(string(result), fragment) {
+			t.Fatalf("missing %s", fragment)
+		}
 	}
 }
