@@ -306,7 +306,9 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		// Persistent mode still needs a signed scratch directory so helper
 		// config/status files can be collected after the parent is SIGKILLed.
 		dir, err := os.MkdirTemp("", "krunlet-state-*")
-		if err != nil { return result, err }
+		if err != nil {
+			return result, err
+		}
 		marker, err := markTempRoot(dir)
 		if err != nil {
 			_ = os.RemoveAll(dir)
