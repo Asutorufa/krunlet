@@ -103,7 +103,9 @@ func TestNative32RunsBounded(t *testing.T) {
 
 func integrationCgroup(t *testing.T) string {
 	t.Helper()
-	parent:=os.Getenv("KRUNLET_TEST_CGROUP_PARENT")
-	if parent=="" {t.Fatal("a pre-delegated cgroup v2 parent is required for real VM tests")}
+	parent := os.Getenv("KRUNLET_TEST_CGROUP_PARENT")
+	if parent == "" {
+		t.Fatal("a pre-delegated cgroup v2 parent is required for real VM tests")
+	}
 	return parent
 }

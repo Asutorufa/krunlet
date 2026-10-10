@@ -7,9 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
-	"runtime"
 	"time"
 )
 
@@ -21,16 +21,20 @@ var (
 // globalVMGate is shared by every Runner in this Go process, including
 // sessions and live VMs. The default is max(1, min(4, NumCPU/2)).
 var globalVMGate = struct {
-	mu sync.Mutex
-	used int
-	max int
+	mu      sync.Mutex
+	used    int
+	max     int
 	changed chan struct{}
-}{max:defaultVMConcurrency(),changed:make(chan struct{})}
+}{max: defaultVMConcurrency(), changed: make(chan struct{})}
 
 func defaultVMConcurrency() int {
-	n:=runtime.NumCPU()/2
-	if n<1{return 1}
-	if n>4{return 4}
+	n := runtime.NumCPU() / 2
+	if n < 1 {
+		return 1
+	}
+	if n > 4 {
+		return 4
+	}
 	return n
 }
 
@@ -38,13 +42,17 @@ func defaultVMConcurrency() int {
 // The limit is shared by all Runner instances. A change may be made only
 // when no VM is active; independent OS processes need host quotas/cgroups.
 func SetGlobalVMLimit(n int) error {
-	if n<1{return errors.New("global VM limit must be positive")}
+	if n < 1 {
+		return errors.New("global VM limit must be positive")
+	}
 	globalVMGate.mu.Lock()
 	defer globalVMGate.mu.Unlock()
-	if globalVMGate.used!=0{return errors.New("cannot adjust global VM limit while VMs are running")}
-	globalVMGate.max=n
+	if globalVMGate.used != 0 {
+		return errors.New("cannot adjust global VM limit while VMs are running")
+	}
+	globalVMGate.max = n
 	close(globalVMGate.changed)
-	globalVMGate.changed=make(chan struct{})
+	globalVMGate.changed = make(chan struct{})
 	return nil
 }
 
@@ -56,19 +64,24 @@ func GlobalVMLimit() int {
 
 func acquireGlobalVM(ctx context.Context, failFast bool) error {
 	for {
-		if err:=ctx.Err();err!=nil{return err}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		globalVMGate.mu.Lock()
-		if globalVMGate.used<globalVMGate.max {
+		if globalVMGate.used < globalVMGate.max {
 			globalVMGate.used++
 			globalVMGate.mu.Unlock()
 			return nil
 		}
-		changed:=globalVMGate.changed
+		changed := globalVMGate.changed
 		globalVMGate.mu.Unlock()
-		if failFast{return ErrTooManyVMs}
+		if failFast {
+			return ErrTooManyVMs
+		}
 		select {
 		case <-changed:
-		case <-ctx.Done():return ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
@@ -78,11 +91,13 @@ func releaseGlobalVM() {
 	defer globalVMGate.mu.Unlock()
 	globalVMGate.used--
 	close(globalVMGate.changed)
-	globalVMGate.changed=make(chan struct{})
+	globalVMGate.changed = make(chan struct{})
 }
 
 func (r *Runner) acquire(ctx context.Context) error {
-	if err := acquireGlobalVM(ctx,r.cfg.FailFast);err!=nil{return err}
+	if err := acquireGlobalVM(ctx, r.cfg.FailFast); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		releaseGlobalVM()
 		return err

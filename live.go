@@ -147,8 +147,15 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	cmd := exec.CommandContext(vmCtx, cfg.HelperPath, helperArg, "--config", configPath)
 	supervisor := configureHelper(cmd)
 	cg, err := prepareVMCgroup(cfg)
-	if err != nil {cancel();return nil,err}
-	defer func() { if err!=nil && cg!=nil { _=cg.Close() } }()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	defer func() {
+		if err != nil && cg != nil {
+			_ = cg.Close()
+		}
+	}()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -171,7 +178,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
 		supervisor: supervisor, quotaRunner: sess.runner, cgroup: cg, waitDone: make(chan struct{})}
 	startBoot := time.Now()
-	if err = startHelperInCgroup(supervisor,cg); err != nil {
+	if err = startHelperInCgroup(supervisor, cg); err != nil {
 		cancel()
 		_ = stdin.Close()
 		return nil, fmt.Errorf("start VM helper: %w", err)

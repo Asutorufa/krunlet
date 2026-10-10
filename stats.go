@@ -14,13 +14,13 @@ import (
 // (currently one-shot runs). DurationMillis measures the entire command
 // including admission, cloning, and cleanup. No Prometheus dependency.
 type Stats struct {
-	RunID          string
-	ReadyMillis    int64
-	DurationMillis int64
-	ExitCode       int
+	RunID                string
+	ReadyMillis          int64
+	DurationMillis       int64
+	ExitCode             int
 	HostHelperPeakRSSMiB float64
-	NetworkPolicy  bool
-	TimedOut       bool
+	NetworkPolicy        bool
+	TimedOut             bool
 }
 
 func newRunID() string {

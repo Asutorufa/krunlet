@@ -67,9 +67,9 @@ type Options struct {
 	// CgroupParent enables mandatory per-VM Linux cgroup v2 containment,
 	// under a host-admin delegated cgroup (e.g. /sys/fs/cgroup/krunlet).
 	// Requires writable memory/pids controllers and cgroup.kill.
-	CgroupParent string
+	CgroupParent         string
 	CgroupMemoryMaxBytes int64 // zero = guest memory + 256 MiB overhead
-	CgroupPidsMax int64 // zero = 256 host processes/threads
+	CgroupPidsMax        int64 // zero = 256 host processes/threads
 	// OnStats receives one snapshot for each completed or failed run.
 	// It is invoked after resource cleanup without holding Runner locks.
 	OnStats func(Stats)
@@ -170,9 +170,15 @@ func New(opts Options) (*Runner, error) {
 		return nil, errors.New("cgroup limits cannot be negative")
 	}
 	if opts.CgroupParent != "" {
-		if runtime.GOOS != "linux" {return nil, errors.New("cgroup v2 containment requires Linux")}
-		if !filepath.IsAbs(opts.CgroupParent) {return nil, errors.New("cgroup parent path must be absolute")}
-		if opts.CgroupMemoryMaxBytes > 0 && opts.CgroupMemoryMaxBytes < 128<<20 {return nil, errors.New("cgroup memory maximum too small")}
+		if runtime.GOOS != "linux" {
+			return nil, errors.New("cgroup v2 containment requires Linux")
+		}
+		if !filepath.IsAbs(opts.CgroupParent) {
+			return nil, errors.New("cgroup parent path must be absolute")
+		}
+		if opts.CgroupMemoryMaxBytes > 0 && opts.CgroupMemoryMaxBytes < 128<<20 {
+			return nil, errors.New("cgroup memory maximum too small")
+		}
 	}
 	if opts.CPUs > 64 || opts.MemoryMiB < 128 || opts.MemoryMiB > 65536 {
 		return nil, errors.New("CPU or memory limit out of range")
@@ -416,8 +422,12 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	cmd := exec.CommandContext(callCtx, r.cfg.HelperPath, helperArg, "--config", configFile.Name())
 	supervisor := configureHelper(cmd)
 	cg, err := prepareVMCgroup(r.cfg)
-	if err != nil {return result, err}
-	if cg != nil {defer func() { _ = cg.Close() }()}
+	if err != nil {
+		return result, err
+	}
+	if cg != nil {
+		defer func() { _ = cg.Close() }()
+	}
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)
 	}
@@ -429,7 +439,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	errout := &limitedWriter{budget: combined, mirror: stderr}
 	cmd.Stdout = out
 	cmd.Stderr = errout
-	err = startHelperInCgroup(supervisor,cg)
+	err = startHelperInCgroup(supervisor, cg)
 	if err != nil {
 		return result, fmt.Errorf("start helper: %w", err)
 	}

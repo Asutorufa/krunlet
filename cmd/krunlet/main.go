@@ -234,7 +234,7 @@ func run() int {
 		}
 		if *globalLimit != 0 {
 			if e := krunlet.SetGlobalVMLimit(*globalLimit); e != nil {
-				fmt.Fprintln(os.Stderr,e)
+				fmt.Fprintln(os.Stderr, e)
 				return 2
 			}
 		}
