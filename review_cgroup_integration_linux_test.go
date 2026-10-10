@@ -87,12 +87,23 @@ func cgroupPressureDiagnostics(path string) string {
 	return strings.Join(diagnostics, "; ")
 }
 
+// Disable swap for deterministic anonymous-memory OOM tests. With swap
+// enabled, a process may touch more pages than memory.max and still survive
+// by paging out old pages, so the test would never observe oom_kill.
+func disableCgroupSwap(t *testing.T, group string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(group, "memory.swap.max"), []byte("0"), 0600); err != nil {
+		t.Fatalf("disable cgroup swap for deterministic OOM: %v", err)
+	}
+}
+
 func TestReviewRealHostCgroupOOMIsDistinguishable(t *testing.T) {
 	cg, err := prepareVMCgroup(Options{CgroupParent: integrationCgroup(t), MemoryMiB: 256, CgroupMemoryMaxBytes: 128 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cg.Close()
+	disableCgroupSwap(t, cg.path)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	cmd := gatedHostPressure(ctx, `import time
@@ -222,6 +233,7 @@ func TestReviewVMHostOOMMappedToTypedError(t *testing.T) {
 		<-results
 		t.Fatal("real VM never created a host cgroup")
 	}
+	disableCgroupSwap(t, group)
 	// A gated helper waits until it has joined the VM cgroup, so allocation
 	// can never escape to the CI host's unbounded parent cgroup.
 	rd, wr, err := os.Pipe()
