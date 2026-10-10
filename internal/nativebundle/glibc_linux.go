@@ -18,13 +18,13 @@ func checkGlibcBaseline(baseline string) error {
 	defer purego.Dlclose(h)
 	s, err := purego.Dlsym(h, "gnu_get_libc_version")
 	if err != nil { return fmt.Errorf("not glibc: %w", err) }
-	var f func() uintptr
+	var f func() unsafe.Pointer
 	purego.RegisterFunc(&f, s)
 	p := f()
-	if p == 0 { return fmt.Errorf("glibc reported empty version") }
+	if p == nil { return fmt.Errorf("glibc reported empty version") }
 	var v []byte
 	for i := uintptr(0); i < 32; i++ {
-		ch := *(*byte)(unsafe.Pointer(p + i))
+		ch := *(*byte)(unsafe.Add(p, i))
 		if ch == 0 { break }
 		v = append(v, ch)
 	}
