@@ -111,6 +111,8 @@ jobs:
             cp -L "$fw" "$stage/libkrunfw.so.5"
             patchelf --set-rpath '$ORIGIN' "$stage/libkrun.so.1"
             readelf -d "$stage/libkrun.so.1" | grep -F '$ORIGIN'
+            # libkrun 1.19.6 uses runtime dlopen, not DT_NEEDED, for firmware.
+            strings "$stage/libkrun.so.1" | grep -Fx libkrunfw.so.5
             nm -D "$stage/libkrun.so.1" | grep -F 'krun_add_net_unixstream'
             ldd "$stage/libkrun.so.1" | tee "$RUNNER_TEMP/native-ldd.txt"
             ! grep -q 'not found' "$RUNNER_TEMP/native-ldd.txt"

@@ -401,10 +401,10 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		return result, err
 	}
 	nativeInfo, err := nativebundle.ResolveWithFallback(r.cfg.LibraryPath, r.cfg.AllowHostLibraryFallback)
+	result.Native = nativeInfo
 	if err != nil {
 		return result, fmt.Errorf("prepare libkrun: %w", err)
 	}
-	result.Native = nativeInfo
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
 		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: nativeInfo.Library, Firmware: nativeInfo.Firmware,

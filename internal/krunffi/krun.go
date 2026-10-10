@@ -359,6 +359,9 @@ func openFirmware(lib, fw string) (uintptr, int32, string, error) {
 	}
 	handle, err := purego.Dlopen(fw, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
+		if runtime.GOOS == "darwin" {
+			return 0, 0, fw, fmt.Errorf("macOS cannot load extracted signed libkrunfw at %s (check code signature and library validation): %w", fw, err)
+		}
 		return 0, 0, fw, fmt.Errorf("load required libkrunfw ABI 5 from %s: %w", fw, err)
 	}
 	version, err := purego.Dlsym(handle, "krunfw_get_version")

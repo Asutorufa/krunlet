@@ -11,6 +11,68 @@
 - Trusted, prepared **Linux rootfs directory**, e.g. from an image you built and verified. It must contain the invoked binaries and libraries.
 - Go 1.23+ to build from source. No C compiler or cgo required to build the Go binary.
 
+## Validated embedded dynamic libraries and release trust
+
+**This is not a statically linked, self-contained executable.** Official
+artifacts contain the Go CLI with two **embedded dynamic libraries**, which
+are extracted into a private cache and loaded with `purego` at runtime.
+
+- Linux x86-64/ARM64: libkrun **1.19.6** and libkrunfw ABI **5**,
+  firmware **5.5.0+ds-1** from the pinned Ubuntu package.
+- macOS Apple Silicon: libkrun **1.19.6** and libkrunfw ABI **5**
+  (runtime library filename `libkrunfw.5.dylib`), firmware **5.6.2**.
+- These exact per-platform byte combinations are recorded in
+  `native-manifest-OS-ARCH.json` in each Release, including both SHA-256
+  digests, kernel source and patch-series provenance. Only that exact pair
+  is tested. A user-selected host library may report ABI errors and is
+  **not guaranteed** to boot a VM.
+
+Cache is `os.UserCacheDir()/krunlet/native/`, typically
+`$XDG_CACHE_HOME/krunlet/native/` on Linux (default
+`$HOME/.cache/krunlet/native/`) or
+`$HOME/Library/Caches/krunlet/native/` on macOS.
+Each directory is private (0700) with read-only libraries, protected by a
+cross-process lock and checked against the embedded SHA-256 each time.
+After stopping all Krunlet processes, delete the `krunlet/native` directory
+to clear it. Cache extraction requires an executable filesystem: a `noexec`
+cache fails with an explicit error; use a private executable cache location
+instead. No runtime libraries are extracted to shared `/tmp`.
+
+`Options.LibraryPath` / `--lib` explicitly selects a host library.
+If a release's embedded manifest, cache or signature is invalid, the
+default behavior is **fail closed**. Set
+`Options.AllowHostLibraryFallback` or the CLI
+`--allow-host-library-fallback` only when a trusted host runtime is
+deliberately available. The fallback is logged and visible in doctor /
+Result. A `nokrunlet_embed` build tag creates a smaller system-library
+variant, with its missing-bundle fallback visible in doctor.
+
+`krunlet doctor` reports the actual selected library/firmware paths,
+SHA-256 digests, firmware ABI and symbol coverage. It also reports the
+glibc symbol baseline recorded for the Linux build, with a clear error if
+the host glibc is older. The native `PkgConfigVersion` is informational
+and must **not** be confused with the version of a different library loaded
+from a user-chosen path. `krunlet licenses` prints the full Apache-2.0,
+LGPL-2.1-only and GPL-2.0-only texts.
+
+The publish workflow produces `checksums.txt` and a detached
+`checksums.sig` for both rolling `main` and stable versions; the
+installer verifies the signature against its **pinned public key before
+checking hashes**. Publishing requires the protected Actions secret
+`KRUNLET_RELEASE_SIGNING_KEY` containing the matching PEM private key.
+If that secret is absent or mismatched, publishing fails closed. The
+public key is in `docs/release-signing-public.pem`. Build size
+differences between embedded and slim variants are recorded in
+`size-OS-ARCH.txt` assets.
+
+macOS extracted dylibs retain their build-time signatures because
+extraction is byte-for-byte. CI verifies both extracted dylibs with
+`codesign --verify --strict`. Ad-hoc signing does **not** make arbitrary
+third-party Hardened Runtime apps with Library Validation compatible:
+such hosts require team-compatible signing or must reject the runtime
+with an explicit error. Krunlet does not silently disable Library
+Validation, and this release is not Developer ID notarized.
+
 ## Embedded native CLI releases
 
 Official Release binaries include **libkrun 1.19.6** built with `NET=1`
