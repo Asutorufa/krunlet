@@ -501,8 +501,9 @@ func (v *VM) Close() error {
 	v.closed = true
 	_ = v.stdin.Close()
 	<-v.waitDone
+	var groupErr error
 	if v.cgroup != nil {
-		_ = v.cgroup.Close()
+		groupErr = v.cgroup.Close()
 		v.cgroup = nil
 	}
 	if v.networkCleanup != nil {
@@ -517,8 +518,8 @@ func (v *VM) Close() error {
 		v.quotaRunner.release()
 		v.quotaRunner = nil
 	}
-	if err != nil {
-		return err
+	if err != nil || groupErr != nil {
+		return errors.Join(err, groupErr)
 	}
 	// Signal-terminated VMs are the expected close path.
 	return nil

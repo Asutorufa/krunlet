@@ -3,6 +3,8 @@ package krunlet
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -55,5 +57,15 @@ func TestCgroupConfigurationRejectsInvalidRoots(t *testing.T) {
 	}
 	if _, err := New(Options{RootFS: t.TempDir(), CgroupMemoryMaxBytes: -1}); err == nil {
 		t.Fatal("invalid cgroup memory maximum accepted")
+	}
+}
+
+func TestCgroupRejectsForgedControllerFilesOnOrdinaryFilesystem(t *testing.T) {
+	fake := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fake, "cgroup.controllers"), []byte("memory pids"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareVMCgroup(Options{CgroupParent: fake, MemoryMiB: 256}); err == nil {
+		t.Fatal("forged cgroup.controllers file bypassed real cgroup2 filesystem check")
 	}
 }

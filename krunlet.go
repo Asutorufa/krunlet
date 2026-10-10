@@ -426,7 +426,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		return result, err
 	}
 	if cg != nil {
-		defer func() { _ = cg.Close() }()
+		defer func() { retErr = errors.Join(retErr, cg.Close()) }()
 	}
 	if stdin == nil {
 		stdin = strings.NewReader(req.Stdin)

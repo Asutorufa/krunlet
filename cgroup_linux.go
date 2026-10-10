@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 	"time"
 )
 
@@ -29,6 +31,16 @@ func prepareVMCgroup(opts Options) (*vmCgroup, error) {
 	root, err := filepath.EvalSymlinks(opts.CgroupParent)
 	if err != nil {
 		return nil, fmt.Errorf("resolve cgroup parent: %w", err)
+	}
+	// Reject a normal directory with forged cgroup.controllers/cgroup.procs
+	// files. Creating ordinary files would otherwise silently fail open.
+	var fs unix.Statfs_t
+	if err := unix.Statfs(root, &fs); err != nil {
+		return nil, fmt.Errorf("statfs cgroup parent: %w", err)
+	}
+	const cgroup2Magic = 0x63677270
+	if fs.Type != cgroup2Magic {
+		return nil, fmt.Errorf("cgroup parent %q is not on a cgroup v2 filesystem", root)
 	}
 	if _, err = os.Stat(filepath.Join(root, "cgroup.controllers")); err != nil {
 		return nil, fmt.Errorf("cgroup v2 delegation required at %s: %w", root, err)
