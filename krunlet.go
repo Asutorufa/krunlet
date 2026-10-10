@@ -282,16 +282,20 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 			return result, fmt.Errorf("rootfs preflight: %w", err)
 		}
 		var err error
-		root, err = os.MkdirTemp("", "krunlet-root-*")
+		container, err := os.MkdirTemp("", "krunlet-root-*")
 		if err != nil {
 			return result, err
 		}
-		marker, err := markTempRoot(root)
+		marker, err := markTempRoot(container)
 		if err != nil {
-			_ = os.RemoveAll(root)
+			_ = os.RemoveAll(container)
 			return result, err
 		}
-		defer func() { _ = marker.Close(); _ = os.RemoveAll(root) }()
+		defer func() { _ = marker.Close(); _ = os.RemoveAll(container) }()
+		root = filepath.Join(container, "rootfs")
+		if err := os.Mkdir(root, 0700); err != nil {
+			return result, err
+		}
 		if err = copyRootFS(callCtx, r.cfg.RootFS, root); err != nil {
 			return result, fmt.Errorf("stage rootfs: %w", err)
 		}

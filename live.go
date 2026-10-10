@@ -48,6 +48,8 @@ type VM struct {
 	supervisor     *helperSupervisor
 	quotaRunner    *Runner
 	readyMillis    int64
+	waitDone       chan struct{}
+	waitErr        error
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -163,7 +165,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
-		supervisor: supervisor, quotaRunner: sess.runner}
+		supervisor: supervisor, quotaRunner: sess.runner, waitDone: make(chan struct{})}
 	startBoot := time.Now()
 	if err = supervisor.start(); err != nil {
 		cancel()
@@ -171,12 +173,18 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		return nil, fmt.Errorf("start VM helper: %w", err)
 	}
 	go func() { _, _ = io.Copy(v.stderr, stderr) }()
+	// One goroutine owns Wait. This also detects helpers that crash or exit
+	// without a caller issuing Close; Close releases the gateway and quota.
+	go func() {
+		v.waitErr = cmd.Wait()
+		supervisor.finish()
+		close(v.waitDone)
+	}()
 	startupCtx, done := context.WithTimeout(ctx, cfg.Timeout)
 	defer done()
 	if err = v.await(startupCtx, "KRUNLET_READY"); err != nil {
 		v.terminate()
-		_ = cmd.Wait()
-		supervisor.finish()
+		<-v.waitDone
 		if b, e := os.ReadFile(statusPath); e == nil && len(b) > 0 {
 			return nil, fmt.Errorf("libkrun helper: %s", strings.TrimSpace(string(b)))
 		}
@@ -186,7 +194,10 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	// Closing the owning context also reclaims the rootfs, gateway socket
 	// and VM permit even if the caller forgets an explicit Close.
 	go func() {
-		<-vmCtx.Done()
+		select {
+		case <-vmCtx.Done():
+		case <-v.waitDone:
+		}
 		_ = v.Close()
 	}()
 	return v, nil
@@ -478,10 +489,7 @@ func (v *VM) Close() error {
 	}
 	v.closed = true
 	_ = v.stdin.Close()
-	waitErr := v.cmd.Wait()
-	if v.supervisor != nil {
-		v.supervisor.finish()
-	}
+	<-v.waitDone
 	if v.networkCleanup != nil {
 		v.networkCleanup.Close()
 		v.networkCleanup = nil
@@ -498,7 +506,6 @@ func (v *VM) Close() error {
 		return err
 	}
 	// Signal-terminated VMs are the expected close path.
-	_ = waitErr
 	return nil
 }
 

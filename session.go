@@ -48,12 +48,18 @@ func NewSession(ctx context.Context, opts Options) (*Session, error) {
 		_ = os.RemoveAll(temp)
 		return nil, err
 	}
-	if err = copyRootFS(ctx, root, temp); err != nil {
+	clone := filepath.Join(temp, "rootfs")
+	if err = os.Mkdir(clone, 0700); err != nil {
 		_ = marker.Close()
 		_ = os.RemoveAll(temp)
 		return nil, err
 	}
-	opts.RootFS = temp
+	if err = copyRootFS(ctx, root, clone); err != nil {
+		_ = marker.Close()
+		_ = os.RemoveAll(temp)
+		return nil, err
+	}
+	opts.RootFS = clone
 	opts.Persistent = true
 	r, err := New(opts)
 	if err != nil {
@@ -61,7 +67,7 @@ func NewSession(ctx context.Context, opts Options) (*Session, error) {
 		_ = os.RemoveAll(temp)
 		return nil, err
 	}
-	return &Session{runner: r, root: temp, marker: marker}, nil
+	return &Session{runner: r, root: clone, marker: marker}, nil
 }
 
 func (s *Session) Run(ctx context.Context, req Request) (Result, error) {
@@ -204,5 +210,5 @@ func (s *Session) Close() error {
 		_ = s.marker.Close()
 		s.marker = nil
 	}
-	return os.RemoveAll(s.root)
+	return os.RemoveAll(filepath.Dir(s.root))
 }
