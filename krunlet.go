@@ -256,6 +256,14 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	defer func() {
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			result.TimedOut = true
+		}
+		if result.Duration == 0 {
+			result.Duration = time.Since(start)
+		}
+	}()
 	if err := r.acquire(callCtx); err != nil {
 		return result, err
 	}
