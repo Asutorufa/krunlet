@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"unsafe"
@@ -299,7 +300,11 @@ func InspectNative(lib string) (NativeInspection, error) {
 	if out, e := cmd.Output(); e == nil {
 		report.PkgConfigVersion = strings.TrimSpace(string(out))
 	}
-	for _, fw := range []string{"libkrunfw.so.1", "libkrunfw.so", "libkrunfw.dylib"} {
+	for _, fw := range []string{
+		filepath.Join(filepath.Dir(lib), "libkrunfw.so.5"),
+		filepath.Join(filepath.Dir(lib), "libkrunfw.dylib"),
+		"libkrunfw.so.5", "libkrunfw.so.1", "libkrunfw.so", "libkrunfw.dylib",
+	} {
 		id, e := purego.Dlopen(fw, purego.RTLD_NOW|purego.RTLD_LOCAL)
 		if e == nil {
 			report.FirmwareLoadable = true

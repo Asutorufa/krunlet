@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Asutorufa/krunlet/internal/krunffi"
+	"github.com/Asutorufa/krunlet/internal/nativebundle"
 )
 
 // DoctorReport describes native capabilities and, when RootFS is provided,
@@ -28,7 +29,9 @@ type DoctorReport struct {
 // if a trusted rootfs is provided. Without RootFS, it is only a static probe.
 func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, error) {
 	result := DoctorReport{Platform: runtime.GOOS + "/" + runtime.GOARCH}
-	native, err := krunffi.InspectNative(lib)
+	nativeLib, err := nativebundle.Library(lib)
+	if err != nil { return result, fmt.Errorf("prepare libkrun: %w", err) }
+	native, err := krunffi.InspectNative(nativeLib)
 	result.Native = native
 	if err != nil {
 		return result, fmt.Errorf("libkrun diagnostic: %w", err)
@@ -62,7 +65,7 @@ func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, erro
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	t, err := New(Options{RootFS: rootfs, LibraryPath: lib, Timeout: 10 * time.Second})
+	t, err := New(Options{RootFS: rootfs, LibraryPath: nativeLib, Timeout: 10 * time.Second})
 	if err != nil {
 		return result, err
 	}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Asutorufa/krunlet/internal/krunffi"
+	"github.com/Asutorufa/krunlet/internal/nativebundle"
 )
 
 // Options are runner-wide defaults. A trusted, prepared Linux rootfs directory
@@ -395,9 +396,11 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	if err = status.Close(); err != nil {
 		return result, err
 	}
+	nativeLib, err := nativebundle.Library(r.cfg.LibraryPath)
+	if err != nil { return result, fmt.Errorf("prepare libkrun: %w", err) }
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
-		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath,
+		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: nativeLib,
 		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil, NetSocket: lease.socket,
 		RunID: runID}
 	configFile, err := os.CreateTemp(stateDir, "config-*.json")
@@ -524,5 +527,7 @@ func Doctor(lib string) error {
 	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
 		return errors.New("libkrun requires Apple Silicon on macOS")
 	}
-	return krunffi.Available(lib)
+	resolved, err := nativebundle.Library(lib)
+	if err != nil { return err }
+	return krunffi.Available(resolved)
 }
