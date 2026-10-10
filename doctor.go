@@ -21,7 +21,7 @@ type DoctorReport struct {
 	KVMError       string                   `json:"kvm_error,omitempty"`
 	SmokeAttempted bool                     `json:"smoke_attempted"`
 	SmokeMillis    int64                    `json:"smoke_millis,omitempty"`
-	SmokeExitCode  int                      `json:"smoke_exit_code,omitempty"`
+	SmokeExitCode  int                      `json:"smoke_exit_code"`
 }
 
 // DoctorDetailed probes ABI feature support and runs a minimal guest /bin/true
