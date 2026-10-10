@@ -164,3 +164,30 @@ func TestConcurrent32NoTemporaryRootsLeft(t *testing.T) {
 		}
 	}
 }
+
+func TestTimedOutWhileWaitingForVMQuota(t *testing.T) {
+	var observed Stats
+	r, err := New(Options{
+		RootFS: t.TempDir(),
+		MaxConcurrentVMs: 1,
+		Timeout: 35 * time.Millisecond,
+		OnStats: func(stats Stats) { observed = stats },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.acquire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer r.release()
+	res, err := r.Run(context.Background(), Request{Command: []string{"/bin/true"}})
+	if !errors.Is(err, context.DeadlineExceeded) || !res.TimedOut {
+		t.Fatalf("queue deadline was not reflected in Result: %+v, %v", res, err)
+	}
+	if res.RunID == "" || observed.RunID != res.RunID || !observed.TimedOut {
+		t.Fatalf("queue deadline was not reflected in Stats: %+v, %+v", res, observed)
+	}
+	if res.Duration <= 0 {
+		t.Fatalf("queue deadline produced empty duration: %+v", res)
+	}
+}
