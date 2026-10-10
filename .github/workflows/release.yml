@@ -86,6 +86,7 @@ jobs:
           brew tap libkrun/krun
           brew trust libkrun/krun
           brew install libkrunfw lld llvm xz
+          test "$(brew list --versions libkrunfw | awk '{print $2}')" = "5.6.2"
           test -f "$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
           test -f "$(brew --prefix llvm)/lib/libclang.dylib"
       - name: Build pinned libkrun with NET=1 and stage relocatable bundle
@@ -131,26 +132,57 @@ jobs:
             rustc -vV # fail immediately if dyld is loading an incompatible LLVM
             make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
             lib="$RUNNER_TEMP/libkrun/target/release/libkrun.1.19.6.dylib"
-            fw="$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
+            fw="$(brew --prefix libkrunfw)/lib/libkrunfw.5.dylib"
             test -n "$lib" && test -f "$lib" && test -f "$fw"
             cp -L "$lib" "$stage/libkrun.dylib"
-            cp -L "$fw" "$stage/libkrunfw.dylib"
+            cp -L "$fw" "$stage/libkrunfw.5.dylib"
             # A signed single-file CLI must load firmware relative to its
             # extracted libkrun, not a machine-specific Homebrew prefix.
             install_name_tool -id @loader_path/libkrun.dylib "$stage/libkrun.dylib"
-            install_name_tool -id @loader_path/libkrunfw.dylib "$stage/libkrunfw.dylib"
+            install_name_tool -id @loader_path/libkrunfw.5.dylib "$stage/libkrunfw.5.dylib"
             while read -r dep; do
               [ -n "$dep" ] || continue
-              install_name_tool -change "$dep" @loader_path/libkrunfw.dylib "$stage/libkrun.dylib"
+              install_name_tool -change "$dep" @loader_path/libkrunfw.5.dylib "$stage/libkrun.dylib"
             done < <(otool -L "$stage/libkrun.dylib" | awk 'NR>1 {print $1}' | grep libkrunfw || true)
             otool -L "$stage/libkrun.dylib"
-            codesign --force --sign - "$stage/libkrunfw.dylib"
+            codesign --force --sign - "$stage/libkrunfw.5.dylib"
             codesign --force --sign - "$stage/libkrun.dylib"
-            codesign --verify --strict "$stage/libkrunfw.dylib"
+            codesign --verify --strict "$stage/libkrunfw.5.dylib"
             codesign --verify --strict "$stage/libkrun.dylib"
           fi
           test -s "$stage/libkrun."* 
           test -s "$stage/libkrunfw."*
+          # This manifest fingerprints the *staged bytes*, not a system lib.
+          STAGE="$stage" GOOS="$GOOS" python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess
+          stage = pathlib.Path(os.environ["STAGE"])
+          linux = os.environ["GOOS"] == "linux"
+          lib = stage / ("libkrun.so.1" if linux else "libkrun.dylib")
+          fw = stage / ("libkrunfw.so.5" if linux else "libkrunfw.5.dylib")
+          baseline = ""
+          if linux:
+              versions = re.findall(r"GLIBC_(\d+\.\d+)", subprocess.check_output(["readelf", "-V", str(lib)], text=True))
+              if versions:
+                  baseline = max(versions, key=lambda x: tuple(map(int, x.split("."))))
+          version = "5.5.0+ds-1" if linux else "5.6.2"
+          fw_tag = "v5.5.0" if linux else "v5.6.2"
+          kernel = "linux-6.12.91" if linux else "linux-6.12.109"
+          data = {
+              "libkrun_version": "1.19.6",
+              "libkrun_commit": "227b2de6ed323fe180e02f871c5f325a90c13cc2",
+              "firmware_version": version,
+              "firmware_abi": 5,
+              "glibc_baseline": baseline,
+              "libkrun_sha256": hashlib.sha256(lib.read_bytes()).hexdigest(),
+              "libkrunfw_sha256": hashlib.sha256(fw.read_bytes()).hexdigest(),
+              "libkrun_source": "https://github.com/libkrun/libkrun/tree/v1.19.6",
+              "libkrunfw_source": "https://github.com/libkrun/libkrunfw/tree/" + fw_tag,
+              "kernel_source": "https://cdn.kernel.org/pub/linux/kernel/v6.x/" + kernel + ".tar.xz",
+              "patches_source": "https://github.com/libkrun/libkrunfw/tree/" + fw_tag + "/patches",
+          }
+          (stage / "manifest.json").write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(data, sort_keys=True))
+          PY
       - name: Build single-file CLI with embedded native runtime
         shell: bash
         env:
@@ -178,6 +210,7 @@ jobs:
             codesign --force --sign - --entitlements docs/krunlet.entitlements "$target"
             codesign --verify --strict "$target"
           fi
+          cp internal/nativebundle/assets/manifest.json "dist/native-manifest-$GOOS-$GOARCH.json"
           go test ./internal/nativebundle
           # Release artifact MUST resolve its embedded library without
           # requiring a system libkrun installation.
@@ -185,10 +218,18 @@ jobs:
           grep -q 'krunlet/native/' dist/doctor.json
           grep -q '"VirtioNET":true' dist/doctor.json
           grep -q '"FirmwareLoadable":true' dist/doctor.json
+          if [ "$GOOS" = darwin ]; then
+            cachelib="$(python3 -c 'import json; print(json.load(open("dist/doctor.json"))["native_bundle"]["firmware"])')"
+            test -f "$cachelib"
+            codesign --verify --strict "$cachelib"
+            codesign --verify --strict "$(dirname "$cachelib")/libkrun.dylib"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: krunlet-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/krunlet-*
+          path: |
+            dist/krunlet-*
+            dist/native-manifest-*
           if-no-files-found: error
           retention-days: 14
 
@@ -247,8 +288,9 @@ jobs:
           test -f dist/krunlet-darwin-arm64
           mkdir -p release
           cp dist/krunlet-* release/
+          cp dist/native-manifest-* release/
           cp install.sh release/install.sh
-          (cd release && sha256sum krunlet-* install.sh | sort -k2) > release/checksums.txt
+          (cd release && sha256sum krunlet-* native-manifest-* install.sh | sort -k2) > release/checksums.txt
 
           {
             echo "## Changes"
@@ -272,6 +314,11 @@ jobs:
             echo '- Check virtualization/host dependencies: krunlet doctor --rootfs /trusted/rootfs.'
             echo '- Linux system libc and other external native transitive dependencies remain platform-dependent; macOS assets are ad-hoc signed (not notarized).'
             echo '- libkrun: Apache-2.0 (https://github.com/libkrun/libkrun/tree/v1.19.6); firmware: GPL-2.0/LGPL-2.1 (https://github.com/libkrun/libkrunfw). Redistributors must satisfy the corresponding-source obligations.'
+            echo '- Native libkrun and firmware SHA-256, pinned sources and patched kernel are listed in each native-manifest-OS-ARCH.json asset.'
+            for manifest in release/native-manifest-*.json; do
+              echo "- $(basename "$manifest")"
+              cat "$manifest"
+            done
             echo '- Verify asset integrity using checksums.txt (SHA-256).'
             echo '- Security isolation is experimental and depends on host-level virtualization, process and service cgroups.'
           } > release-notes.md
