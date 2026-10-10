@@ -18,6 +18,9 @@ jobs:
           cache: false
       - name: Fetch dependencies
         run: go mod download
+      - name: Installer must refuse unsigned or tampered artifacts
+        shell: bash
+        run: bash scripts/test-install-signature.sh
       - name: Signing primitive must reject modified manifest
         shell: bash
         run: |
