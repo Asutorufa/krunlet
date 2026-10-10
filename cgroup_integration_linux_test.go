@@ -40,7 +40,7 @@ func TestRealCgroupKillsSetsidEscapes(t *testing.T) {
 	}
 	defer cg.Close()
 	pidFile := filepath.Join(t.TempDir(), "detached.pid")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestRealCgroupKillsSetsidEscapes$")
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestRealCgroupKillsSetsidEscapes$")
 	sup := configureHelper(cmd)
 	cmd.Env = append(cmd.Env, "KRUNLET_CGROUP_ESCAPE_CHILD=1", "KRUNLET_CGROUP_ESCAPE_PIDS="+pidFile)
 	if err := startHelperInCgroup(sup, cg); err != nil {
