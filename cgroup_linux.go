@@ -161,16 +161,26 @@ func (cg *vmCgroup) Close() error {
 // active cgroup must never be removed by a different Runner process.
 func cleanupStaleVMGroups(parent string, age time.Duration) error {
 	entries, err := os.ReadDir(parent)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	cutoff := time.Now().Add(-age)
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "krunlet-vm-") { continue }
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "krunlet-vm-") {
+			continue
+		}
 		path := filepath.Join(parent, entry.Name())
 		info, err := os.Lstat(path)
-		if err != nil || !info.IsDir() || info.ModTime().After(cutoff) { continue }
-		events, err := os.ReadFile(filepath.Join(path,"cgroup.events"))
-		if err != nil { continue }
-		if !strings.Contains("\n"+string(events), "\npopulated 0\n") { continue }
+		if err != nil || !info.IsDir() || info.ModTime().After(cutoff) {
+			continue
+		}
+		events, err := os.ReadFile(filepath.Join(path, "cgroup.events"))
+		if err != nil {
+			continue
+		}
+		if !strings.Contains("\n"+string(events), "\npopulated 0\n") {
+			continue
+		}
 		_ = os.Remove(path)
 	}
 	return nil
