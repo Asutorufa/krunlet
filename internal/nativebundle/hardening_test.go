@@ -32,7 +32,7 @@ func TestABIMismatchIsDistinguishable(t *testing.T) {
 
 func TestCacheCorruptionSelfHeals(t *testing.T) {
 	lib, fw, lb, fb := sample(t)
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "private")
 	a, err := stageBundle(root, lib, fw, lb, fb)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestCacheCorruptionSelfHeals(t *testing.T) {
 
 func TestUnsafeCacheSymlinkRejected(t *testing.T) {
 	lib, fw, lb, fb := sample(t)
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "private")
 	a, err := stageBundle(root, lib, fw, lb, fb)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestUnsafeCacheSymlinkRejected(t *testing.T) {
 
 func TestCachePermissionsAndHash(t *testing.T) {
 	lib, fw, lb, fb := sample(t)
-	a, err := stageBundle(t.TempDir(), lib, fw, lb, fb)
+	a, err := stageBundle(filepath.Join(t.TempDir(), "private"), lib, fw, lb, fb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestConcurrentProcessesSingleCache(t *testing.T) {
 	lib, fw, lb, fb := sample(t)
 	root := os.Getenv("KRUNLET_CACHE_ROOT")
 	if root == "" {
-		root = t.TempDir()
+		root = filepath.Join(t.TempDir(), "private")
 	}
 	if os.Getenv("KRUNLET_CACHE_CHILD") == "1" {
 		_, err := stageBundle(root, lib, fw, lb, fb)
