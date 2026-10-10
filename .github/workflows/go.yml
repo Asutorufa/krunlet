@@ -26,6 +26,11 @@ jobs:
             gofmt -d $files
             exit 1
           fi
+      - name: Build without CGO
+        run: CGO_ENABLED=0 go build ./...
+      - name: Build macOS ARM64 CLI
+        if: runner.os == 'macOS'
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/krunlet-darwin-arm64 ./cmd/krunlet
       - name: Test without CGO
         run: CGO_ENABLED=0 go test ./...
       - name: Vet
@@ -35,6 +40,13 @@ jobs:
         if: runner.os == 'Linux'
         run: CGO_ENABLED=1 go test -race ./...
 
+      - name: Doctor missing-library failure is readable
+        run: |
+          if go run ./cmd/krunlet doctor --lib /krunlet/does-not-exist 2>doctor.err; then
+            echo "doctor unexpectedly accepted a missing library"
+            exit 1
+          fi
+          grep -qi "not ready" doctor.err
       - name: Native doctor (informational on hosted runners)
         run: |
           if [ -e /dev/kvm ]; then
