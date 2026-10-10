@@ -105,7 +105,7 @@ jobs:
           else
             export PKG_CONFIG_PATH="$(brew --prefix libkrunfw)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
             make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
-            lib="$(find "$RUNNER_TEMP/libkrun" -type f -name libkrun.dylib -print -quit)"
+            lib="$RUNNER_TEMP/libkrun/target/release/libkrun.1.19.6.dylib"
             fw="$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
             test -n "$lib" && test -f "$lib" && test -f "$fw"
             cp -L "$lib" "$stage/libkrun.dylib"
