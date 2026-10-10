@@ -287,7 +287,10 @@ jobs:
                 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libssl3t64 libelf1t64 libzstd1 liblzma5 >/dev/null;
                 /usr/local/bin/krunlet doctor --rootfs /guest > /proof/$mode.json"
           done
-          python3 - <<'PY'
+          # Cache belongs to root inside the privileged container and is 0700.
+          # Inspecting the bind mount as the unprivileged runner would report
+          # is_file() == false even though the VM loaded the protected file.
+          sudo --preserve-env=RUNNER_TEMP python3 - <<'PY'
           import hashlib, json, os, pathlib
           for mode in ("clean", "fake"):
               report=json.load(open(os.environ["RUNNER_TEMP"]+"/proof/"+mode+".json"))
