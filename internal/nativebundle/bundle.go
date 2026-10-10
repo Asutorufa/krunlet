@@ -20,6 +20,11 @@ var ErrABIMismatch = errors.New("libkrun/libkrunfw ABI mismatch")
 
 const requiredFirmwareABI = 5
 
+var errCorruptFile = errors.New("untrusted native cache file")
+
+// ValidateABI reports a distinguishable mismatch before libkrun enters the VM.
+func ValidateABI(actual int) error { return checkABI(requiredFirmwareABI, actual) }
+
 // Info describes the selected native runtime. A verified path always refers
 // to the exact embedded bytes, even if a system library has the same name.
 type Info struct {
@@ -208,7 +213,7 @@ func verifyPair(info Info, lib, fw []byte) (bool, error) {
 		data []byte
 	}{{info.Library, lib}, {info.Firmware, fw}} {
 		got, err := readVerifiedFile(item.path)
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errCorruptFile) {
 			return false, nil
 		}
 		if err != nil {
@@ -232,7 +237,7 @@ func readVerifiedFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	if !stat.Mode().IsRegular() || stat.Mode().Perm()&0222 != 0 {
-		return nil, fmt.Errorf("unsafe cached native file %s: expected read-only regular file", path)
+		return nil, fmt.Errorf("%w: %s: expected read-only regular file", errCorruptFile, path)
 	}
 	if stat.Size() < 1 || stat.Size() > 256<<20 {
 		return nil, fmt.Errorf("invalid native file size: %s", path)
