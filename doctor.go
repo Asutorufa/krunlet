@@ -18,6 +18,8 @@ import (
 type DoctorReport struct {
 	Native         krunffi.NativeInspection `json:"native"`
 	Bundle         nativebundle.Info        `json:"native_bundle"`
+	Containment    string                   `json:"containment"`
+	CgroupError    string                   `json:"cgroup_error,omitempty"`
 	Platform       string                   `json:"platform"`
 	KVMAccessible  bool                     `json:"kvm_accessible,omitempty"`
 	KVMError       string                   `json:"kvm_error,omitempty"`
@@ -29,7 +31,27 @@ type DoctorReport struct {
 // DoctorDetailed probes ABI feature support and runs a minimal guest /bin/true
 // if a trusted rootfs is provided. Without RootFS, it is only a static probe.
 func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, error) {
-	result := DoctorReport{Platform: runtime.GOOS + "/" + runtime.GOARCH}
+	return DoctorDetailedWithCgroup(ctx, lib, rootfs, "")
+}
+
+// DoctorDetailedWithCgroup probes host containment independently of the
+// native runtime. A configured parent must not silently downgrade security.
+func DoctorDetailedWithCgroup(ctx context.Context, lib, rootfs, parent string) (DoctorReport, error) {
+	result := DoctorReport{Platform: runtime.GOOS + "/" + runtime.GOARCH, Containment: defaultContainment()}
+	if parent != "" {
+		cg, err := prepareVMCgroup(Options{CgroupParent: parent, MemoryMiB: 512})
+		if err != nil {
+			result.Containment = "none"
+			result.CgroupError = err.Error()
+			return result, fmt.Errorf("cgroup containment unavailable: %w", err)
+		}
+		result.Containment = "cgroup_v2"
+		if err := cg.Close(); err != nil {
+			result.Containment = "none"
+			result.CgroupError = err.Error()
+			return result, fmt.Errorf("cgroup probe cleanup: %w", err)
+		}
+	}
 	info, err := nativebundle.Resolve(lib)
 	result.Bundle = info
 	if err != nil {
@@ -69,7 +91,7 @@ func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, erro
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	t, err := New(Options{RootFS: rootfs, LibraryPath: lib, Timeout: 10 * time.Second})
+	t, err := New(Options{RootFS: rootfs, LibraryPath: lib, CgroupParent: parent, Timeout: 10 * time.Second})
 	if err != nil {
 		return result, err
 	}

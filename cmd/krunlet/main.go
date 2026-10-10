@@ -69,10 +69,11 @@ func run() int {
 		f := flag.NewFlagSet("doctor", flag.ContinueOnError)
 		lib := f.String("lib", "", "libkrun shared library path")
 		rootfs := f.String("rootfs", "", "trusted rootfs for a real /bin/true VM smoke test (optional)")
+		cgroupParent := f.String("cgroup-parent", "", "delegated cgroup v2 parent to probe for host containment")
 		if f.Parse(os.Args[2:]) != nil {
 			return 2
 		}
-		report, e := krunlet.DoctorDetailed(context.Background(), *lib, *rootfs)
+		report, e := krunlet.DoctorDetailedWithCgroup(context.Background(), *lib, *rootfs, *cgroupParent)
 		_ = json.NewEncoder(os.Stdout).Encode(report)
 		if e != nil {
 			fmt.Fprintln(os.Stderr, "not ready:", e)

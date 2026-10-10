@@ -5,22 +5,25 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 )
 
-// Stats describes a VM command. HostHelperPeakRSSMiB is the host helper's
-// high-water resident set size, NEVER guest allocated memory. ReadyMillis
-// measures helper startup to VM-ready; -1 means no ready signal exists
-// (currently one-shot runs). DurationMillis measures the entire command
-// including admission, cloning, and cleanup. No Prometheus dependency.
+// Stats describes a VM command. MemoryPeakBytes is the host cgroup's
+// memory.peak (including VMM guest RAM and charged page cache), NOT guest
+// internal memory. Nil means not measured. HelperRSSBytes is the host helper
+// process's peak resident set size. DurationMillis covers the whole run.
 type Stats struct {
-	RunID                string
-	ReadyMillis          int64
-	DurationMillis       int64
-	ExitCode             int
-	HostHelperPeakRSSMiB float64
-	NetworkPolicy        bool
-	TimedOut             bool
+	RunID             string  `json:"run_id"`
+	ReadyMillis       int64   `json:"ready_millis"`
+	DurationMillis    int64   `json:"duration_millis"`
+	ExitCode          int     `json:"exit_code"`
+	HelperRSSBytes    uint64  `json:"helper_rss_bytes"`
+	MemoryPeakBytes   *uint64 `json:"memory_peak_bytes,omitempty"`
+	Containment       string  `json:"containment"`
+	TerminationReason string  `json:"termination_reason,omitempty"`
+	NetworkPolicy     bool    `json:"network_policy"`
+	TimedOut          bool    `json:"timed_out"`
 }
 
 func newRunID() string {
@@ -29,4 +32,13 @@ func newRunID() string {
 		return hex.EncodeToString(bytes[:])
 	}
 	return fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+}
+
+func defaultContainment() string {
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		return "process_group"
+	default:
+		return "none"
+	}
 }

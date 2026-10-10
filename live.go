@@ -31,27 +31,30 @@ import (
 // This protocol is intended for trusted infrastructure and is not a security
 // boundary against a malicious guest able to write to its control directory.
 type VM struct {
-	mu             sync.Mutex
-	stopOnce       sync.Once
-	stop           context.CancelFunc
-	cmd            *exec.Cmd
-	stdin          io.WriteCloser
-	stdout         *bufio.Reader
-	stderr         *boundedBuffer
-	session        *Session
-	control        string // guest absolute path
-	hostControl    string
-	statusPath     string
-	configPath     string
-	networkCleanup *networkLease
-	next           uint64
-	closed         bool
-	supervisor     *helperSupervisor
-	quotaRunner    *Runner
-	cgroup         *vmCgroup
-	readyMillis    int64
-	waitDone       chan struct{}
-	waitErr        error
+	mu                    sync.Mutex
+	stopOnce              sync.Once
+	stop                  context.CancelFunc
+	cmd                   *exec.Cmd
+	stdin                 io.WriteCloser
+	stdout                *bufio.Reader
+	stderr                *boundedBuffer
+	session               *Session
+	control               string // guest absolute path
+	hostControl           string
+	statusPath            string
+	configPath            string
+	networkCleanup        *networkLease
+	next                  uint64
+	closed                bool
+	supervisor            *helperSupervisor
+	quotaRunner           *Runner
+	cgroup                *vmCgroup
+	previousOOMKills      uint64
+	previousPidsMaxEvents uint64
+	readyMillis           int64
+	nativeInfo            nativebundle.Info
+	waitDone              chan struct{}
+	waitErr               error
 }
 
 const liveDriver = `printf 'KRUNLET_READY\n'
@@ -181,7 +184,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 	v := &VM{stop: cancel, cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 8192),
 		networkCleanup: lease,
 		stderr:         &boundedBuffer{limit: 65536}, session: sess, control: control, hostControl: folder, statusPath: statusPath, configPath: configPath,
-		supervisor: supervisor, quotaRunner: sess.runner, cgroup: cg, waitDone: make(chan struct{})}
+		supervisor: supervisor, quotaRunner: sess.runner, cgroup: cg, waitDone: make(chan struct{}), nativeInfo: nativeInfo}
 	startBoot := time.Now()
 	if err = startHelperInCgroup(supervisor, cg); err != nil {
 		cancel()
@@ -207,6 +210,16 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		return nil, fmt.Errorf("boot VM: %w; helper stderr: %s", err, v.stderr.String())
 	}
 	v.readyMillis = time.Since(startBoot).Milliseconds()
+	if cg != nil {
+		initial, e := cg.usage()
+		if e != nil {
+			v.terminate()
+			<-v.waitDone
+			return nil, fmt.Errorf("read initial VM cgroup events: %w", e)
+		}
+		v.previousOOMKills = initial.OOMKills
+		v.previousPidsMaxEvents = initial.PidsMaxEvents
+	}
 	// Closing the owning context also reclaims the rootfs, gateway socket
 	// and VM permit even if the caller forgets an explicit Close.
 	go func() {
@@ -271,13 +284,39 @@ func (v *VM) Run(ctx context.Context, req Request) (res Result, runErr error) {
 			callback = v.session.runner.cfg.OnStats
 			policyEnabled = v.session.runner.cfg.NetworkPolicy != nil
 		}
+		if v.cgroup != nil {
+			if usage, err := v.cgroup.usage(); err == nil {
+				res.MemoryPeakBytes = usage.MemoryPeakBytes
+				// memory.events and pids.events are cumulative for the lifetime
+				// of a persistent VM. Only NEW events belong to this command.
+				newOOM := usage.OOMKills > v.previousOOMKills
+				newPids := usage.PidsMaxEvents > v.previousPidsMaxEvents
+				v.previousOOMKills = usage.OOMKills
+				v.previousPidsMaxEvents = usage.PidsMaxEvents
+				if newOOM {
+					res.TerminationReason = "oom"
+					runErr = errors.Join(runErr, ErrOOM)
+				} else if newPids {
+					res.TerminationReason = "pids_limit"
+					runErr = errors.Join(runErr, ErrPidsLimit)
+				}
+			} else {
+				runErr = errors.Join(runErr, fmt.Errorf("read cgroup usage: %w", err))
+			}
+		}
 		v.mu.Unlock()
 		if callback != nil {
 			callback(Stats{RunID: runID, ReadyMillis: v.readyMillis, DurationMillis: time.Since(start).Milliseconds(),
-				ExitCode: res.ExitCode, HostHelperPeakRSSMiB: 0, NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
+				ExitCode: res.ExitCode, HelperRSSBytes: 0, MemoryPeakBytes: res.MemoryPeakBytes,
+				Containment: res.Containment, TerminationReason: res.TerminationReason,
+				NetworkPolicy: policyEnabled, TimedOut: res.TimedOut})
 		}
 	}()
-	res = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
+	res = Result{ExitCode: -1, RunID: runID, Containment: defaultContainment(), Files: map[string][]byte{}}
+	res.Native = v.nativeInfo
+	if v.cgroup != nil {
+		res.Containment = "cgroup_v2"
+	}
 	if v.closed {
 		return res, errors.New("VM is closed or has failed")
 	}
