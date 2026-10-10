@@ -67,6 +67,16 @@ jobs:
             sudo apt-get install -y "$RUNNER_TEMP/libkrunfw5.deb" "$RUNNER_TEMP/libkrunfw-dev.deb"
           fi
           sudo ldconfig
+          # Ubuntu's libkrunfw-dev installs ABI 5 headers and symlinks but
+          # may omit libkrunfw.pc. Emit metadata from the pinned installed
+          # library path instead of relying on whatever is on the host.
+          if ! pkg-config --exists libkrunfw; then
+            fw="$(ldconfig -p | awk '$1=="libkrunfw.so.5" {print $NF; exit}')"
+            test -n "$fw"
+            printf 'prefix=/usr\nlibdir=%s\nincludedir=/usr/include\nName: libkrunfw\nDescription: Guest kernel library\nVersion: 5.5.0\nLibs: -L${libdir} -lkrunfw\nCflags: -I${includedir}\n' "$(dirname "$fw")" > "$RUNNER_TEMP/libkrunfw.pc"
+            export PKG_CONFIG_PATH="$RUNNER_TEMP:${PKG_CONFIG_PATH:-}"
+            echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          fi
           test "$(pkg-config --modversion libkrunfw)" = 5.5.0
       - name: Install native build dependencies (macOS)
         if: runner.os == 'macOS'
