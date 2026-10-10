@@ -186,3 +186,15 @@ func TestGlibcFloorHumanReadable(t *testing.T) {
 		t.Fatalf("missing readable old-glibc error: %v", err)
 	}
 }
+
+func TestInterruptedExtractionNeverPublishesPartialDirectory(t *testing.T) {
+	lib, fw, lb, _ := sample(t)
+	root := filepath.Join(t.TempDir(), "private")
+	result, err := stageBundle(root, lib, fw, lb, nil)
+	if err == nil {
+		t.Fatal("accepted truncated firmware")
+	}
+	if _, err := os.Lstat(filepath.Dir(result.Library)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("incomplete bundle published: %v", err)
+	}
+}
