@@ -72,6 +72,21 @@ if group not in membership:
 	return exec.CommandContext(ctx, "python3", "-c", program)
 }
 
+// cgroupPressureDiagnostics captures the actual configured kernel
+// limits and counters when a supposedly controlled load survives.
+func cgroupPressureDiagnostics(path string) string {
+	var diagnostics []string
+	for _, name := range []string{"memory.max", "memory.swap.max", "memory.current", "memory.peak", "memory.events", "pids.max", "pids.events"} {
+		b, err := os.ReadFile(filepath.Join(path, name))
+		if err != nil {
+			diagnostics = append(diagnostics, name+"="+err.Error())
+		} else {
+			diagnostics = append(diagnostics, name+"="+strings.TrimSpace(string(b)))
+		}
+	}
+	return strings.Join(diagnostics, "; ")
+}
+
 func TestReviewRealHostCgroupOOMIsDistinguishable(t *testing.T) {
 	cg, err := prepareVMCgroup(Options{CgroupParent: integrationCgroup(t), MemoryMiB: 256, CgroupMemoryMaxBytes: 128 << 20})
 	if err != nil {
@@ -80,10 +95,11 @@ func TestReviewRealHostCgroupOOMIsDistinguishable(t *testing.T) {
 	defer cg.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	cmd := gatedHostPressure(ctx, `import mmap
-mem = mmap.mmap(-1, 512 * 1024 * 1024)
+	cmd := gatedHostPressure(ctx, `import time
+mem = bytearray(512 * 1024 * 1024)
 for n in range(0, len(mem), 4096): mem[n] = 1
-print("unexpected: 512 MiB allocation survived 128 MiB memory.max", flush=True)
+print("unexpected: 512 MiB private allocation survived 128 MiB memory.max", flush=True)
+time.sleep(1)
 `)
 	sup := configureHelper(cmd)
 	// configureHelper owns Env; add the expected membership AFTER it.
@@ -100,7 +116,7 @@ print("unexpected: 512 MiB allocation survived 128 MiB memory.max", flush=True)
 		t.Fatal(err)
 	}
 	if !usage.OOMKilled || usage.MemoryPeakBytes == nil || *usage.MemoryPeakBytes == 0 {
-		t.Fatalf("missing real cgroup OOM: wait=%v peak=%v events=%+v stderr=%q stdout=%q", waitErr, usage.MemoryPeakBytes, usage, stderr.String(), stdout.String())
+		t.Fatalf("missing real cgroup OOM: wait=%v peak=%v events=%+v stderr=%q stdout=%q kernel=%s", waitErr, usage.MemoryPeakBytes, usage, stderr.String(), stdout.String(), cgroupPressureDiagnostics(cg.path))
 	}
 }
 
@@ -212,8 +228,7 @@ func TestReviewVMHostOOMMappedToTypedError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := gatedHostPressure(ctx, `import mmap
-mem = mmap.mmap(-1, 1024 * 1024 * 1024)
+	cmd := gatedHostPressure(ctx, `mem = bytearray(1024 * 1024 * 1024)
 for n in range(0, len(mem), 4096): mem[n] = 1
 `)
 	cmd.Env = append(os.Environ(), "KRUNLET_EXPECT_CGROUP="+filepath.Base(group))
