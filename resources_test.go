@@ -168,10 +168,10 @@ func TestConcurrent32NoTemporaryRootsLeft(t *testing.T) {
 func TestTimedOutWhileWaitingForVMQuota(t *testing.T) {
 	var observed Stats
 	r, err := New(Options{
-		RootFS: t.TempDir(),
+		RootFS:           t.TempDir(),
 		MaxConcurrentVMs: 1,
-		Timeout: 35 * time.Millisecond,
-		OnStats: func(stats Stats) { observed = stats },
+		Timeout:          35 * time.Millisecond,
+		OnStats:          func(stats Stats) { observed = stats },
 	})
 	if err != nil {
 		t.Fatal(err)
