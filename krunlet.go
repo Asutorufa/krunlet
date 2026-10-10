@@ -29,6 +29,9 @@ type Options struct {
 	RootFS      string
 	HelperPath  string
 	LibraryPath string
+	// AllowHostLibraryFallback permits fallback on an invalid embedded bundle.
+	// It must only be set for trusted host installations.
+	AllowHostLibraryFallback bool
 	// Kernel selects a host-side kernel image. Nil uses the bundled libkrunfw
 	// kernel. Custom kernel paths are trusted host inputs, not guest paths.
 	Kernel         *KernelConfig
@@ -97,6 +100,7 @@ type Result struct {
 	TimedOut      bool              `json:"timed_out"`
 	OutputLimited bool              `json:"output_limited"`
 	Files         map[string][]byte `json:"files,omitempty"`
+	Native        nativebundle.Info `json:"native"`
 }
 
 type Runner struct {
@@ -396,13 +400,14 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	if err = status.Close(); err != nil {
 		return result, err
 	}
-	nativeLib, err := nativebundle.Library(r.cfg.LibraryPath)
+	nativeInfo, err := nativebundle.ResolveWithFallback(r.cfg.LibraryPath, r.cfg.AllowHostLibraryFallback)
 	if err != nil {
 		return result, fmt.Errorf("prepare libkrun: %w", err)
 	}
+	result.Native = nativeInfo
 	payload := krunffi.Config{ErrorPath: status.Name(), RootFS: root, WorkDir: req.WorkDir, Command: req.Command, Env: env,
 		CPUs: r.cfg.CPUs, MemoryMiB: r.cfg.MemoryMiB, Network: r.cfg.Network,
-		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: nativeLib,
+		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: nativeInfo.Library, Firmware: nativeInfo.Firmware,
 		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil, NetSocket: lease.socket,
 		RunID: runID}
 	configFile, err := os.CreateTemp(stateDir, "config-*.json")
@@ -529,9 +534,9 @@ func Doctor(lib string) error {
 	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
 		return errors.New("libkrun requires Apple Silicon on macOS")
 	}
-	resolved, err := nativebundle.Library(lib)
+	resolved, err := nativebundle.Resolve(lib)
 	if err != nil {
 		return err
 	}
-	return krunffi.Available(resolved)
+	return krunffi.Available(resolved.Library)
 }

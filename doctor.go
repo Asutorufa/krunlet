@@ -17,6 +17,7 @@ import (
 // starting a guest. PkgConfigVersion may not be the version of Library.
 type DoctorReport struct {
 	Native         krunffi.NativeInspection `json:"native"`
+	Bundle         nativebundle.Info         `json:"native_bundle"`
 	Platform       string                   `json:"platform"`
 	KVMAccessible  bool                     `json:"kvm_accessible,omitempty"`
 	KVMError       string                   `json:"kvm_error,omitempty"`
@@ -29,11 +30,12 @@ type DoctorReport struct {
 // if a trusted rootfs is provided. Without RootFS, it is only a static probe.
 func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, error) {
 	result := DoctorReport{Platform: runtime.GOOS + "/" + runtime.GOARCH}
-	nativeLib, err := nativebundle.Library(lib)
+	info, err := nativebundle.Resolve(lib)
 	if err != nil {
 		return result, fmt.Errorf("prepare libkrun: %w", err)
 	}
-	native, err := krunffi.InspectNative(nativeLib)
+	result.Bundle = info
+	native, err := krunffi.InspectNativePair(info.Library, info.Firmware)
 	result.Native = native
 	if err != nil {
 		return result, fmt.Errorf("libkrun diagnostic: %w", err)
@@ -67,7 +69,7 @@ func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, erro
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	t, err := New(Options{RootFS: rootfs, LibraryPath: nativeLib, Timeout: 10 * time.Second})
+	t, err := New(Options{RootFS: rootfs, LibraryPath: info.Library, Timeout: 10 * time.Second})
 	if err != nil {
 		return result, err
 	}

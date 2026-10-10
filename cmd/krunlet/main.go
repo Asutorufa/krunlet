@@ -90,6 +90,7 @@ func run() int {
 		stdinString := f.String("stdin", "", "literal guest stdin")
 		stdinFile := f.String("stdin-file", "", "guest stdin from host file or '-' for piped stdin")
 		lib := f.String("lib", "", "libkrun library path")
+		allowHost := f.Bool("allow-host-library-fallback", false, "allow explicit fallback to the host libkrun when embedded bundle is unavailable or invalid")
 		kernel := f.String("kernel", "", "host path to a custom Linux kernel image")
 		kernelFormat := f.String("kernel-format", "raw", "kernel format: raw, elf, pe-gz, image-bz2, image-gz, image-zstd")
 		initramfs := f.String("initramfs", "", "optional host path to initramfs (requires --kernel)")
@@ -242,6 +243,7 @@ func run() int {
 		runner, e := krunlet.New(krunlet.Options{RootFS: *root, CPUs: uint8(*cpu), MemoryMiB: uint32(*mem),
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
+			AllowHostLibraryFallback: *allowHost,
 			Kernel: customKernel, NetworkPolicy: networkPolicy,
 			MaxConcurrentVMs: *maxConcurrent, FailFast: *failFast, MaxRootFSBytes: *maxRootFS,
 			CgroupParent: *cgroupParent, CgroupMemoryMaxBytes: *cgroupMemory, CgroupPidsMax: *cgroupPids,

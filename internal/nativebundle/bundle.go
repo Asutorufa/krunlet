@@ -67,6 +67,10 @@ func Library(explicit string) (string, error) {
 // override takes precedence; invalid embedded content never silently falls
 // back to an arbitrary system installation.
 func Resolve(explicit string) (Info, error) {
+	return ResolveWithFallback(explicit, false)
+}
+
+func ResolveWithFallback(explicit string, allowHost bool) (Info, error) {
 	if explicit != "" {
 		slog.Info("krunlet using explicitly configured native library", "path", explicit)
 		return Info{Source: "host", Library: explicit}, nil
@@ -82,13 +86,22 @@ func Resolve(explicit string) (Info, error) {
 		return Info{Source: "host", Fallback: true}, nil
 	}
 	if libErr != nil || fwErr != nil || len(lib) == 0 || len(fw) == 0 {
+		if allowHost {
+			slog.Warn("unsafe native bundle overridden by explicit host fallback", "lib_error", libErr, "firmware_error", fwErr)
+			return Info{Source: "host", Fallback: true}, nil
+		}
 		return Info{}, fmt.Errorf("embedded native runtime is incomplete (%s: %v, %s: %v); refusing host fallback", libName, libErr, fwName, fwErr)
 	}
 	cacheRoot, err := os.UserCacheDir()
 	if err != nil {
 		return Info{}, fmt.Errorf("native cache location: %w", err)
 	}
-	return stageBundle(filepath.Join(cacheRoot, "krunlet", "native"), libName, fwName, lib, fw)
+	info, err := stageBundle(filepath.Join(cacheRoot, "krunlet", "native"), libName, fwName, lib, fw)
+	if err != nil && allowHost {
+		slog.Warn("unsafe native cache overridden by explicit host fallback", "error", err)
+		return Info{Source: "host", Fallback: true}, nil
+	}
+	return info, err
 }
 
 func sha(b []byte) string {
