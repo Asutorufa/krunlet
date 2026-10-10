@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the prebuilt Krunlet CLI. libkrun/libkrunfw are NOT bundled.
+# Install a prebuilt Krunlet CLI with embedded libkrun and libkrunfw.
 set -euo pipefail
 
 repo="${KRUNLET_REPO:-Asutorufa/krunlet}"
@@ -49,4 +49,4 @@ mkdir -p "$install_dir"
 install -m 0755 "$tmp/$asset" "$install_dir/krunlet"
 "$install_dir/krunlet" version
 echo "Krunlet CLI installed to $install_dir/krunlet"
-echo "Native libkrun 1.19.6 (+ libkrunfw / custom guest kernel) is required to start a VM."
+echo "Embedded libkrun 1.19.6 and libkrunfw are included; host KVM/HVF and a trusted rootfs are still required."

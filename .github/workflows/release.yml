@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: prebuilt-release-${{ github.event_name == 'workflow_run' && 'main' || github.event_name == 'push' && github.ref_name || format('pr-{0}', github.event.pull_request.number) }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -30,10 +30,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {goos: linux, goarch: amd64}
-          - {goos: linux, goarch: arm64}
-          - {goos: darwin, goarch: arm64}
-    runs-on: ubuntu-24.04
+          - {goos: linux, goarch: amd64, runner: ubuntu-24.04}
+          - {goos: linux, goarch: arm64, runner: ubuntu-24.04-arm}
+          - {goos: darwin, goarch: arm64, runner: macos-15}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,10 +44,114 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Check install script syntax
+      - name: Check installer syntax
         shell: bash
         run: bash -n install.sh
-      - name: Build self-contained Go CLI (native libkrun installed separately)
+      - name: Install native build dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y git make pkg-config clang lld patchelf \
+            build-essential libc6-dev libelf-dev libssl-dev libclang-dev llvm-dev
+          # Use the same pinned firmware family as real vm-integration.
+          # Older runner package indexes may not offer firmware ABI 5 yet.
+          if apt-cache madison libkrunfw5 | awk '{print $3}' | grep -Fxq '5.5.0+ds-1'; then
+            sudo apt-get install -y libkrunfw5=5.5.0+ds-1 libkrunfw-dev=5.5.0+ds-1
+          else
+            arch="$(dpkg --print-architecture)"
+            url='https://mirrors.edge.kernel.org/ubuntu/pool/universe/libk/libkrunfw'
+            curl -fL --retry 3 "$url/libkrunfw5_5.5.0+ds-1_${arch}.deb" -o "$RUNNER_TEMP/libkrunfw5.deb"
+            curl -fL --retry 3 "$url/libkrunfw-dev_5.5.0+ds-1_${arch}.deb" -o "$RUNNER_TEMP/libkrunfw-dev.deb"
+            sudo apt-get install -y "$RUNNER_TEMP/libkrunfw5.deb" "$RUNNER_TEMP/libkrunfw-dev.deb"
+          fi
+          sudo ldconfig
+          # Ubuntu's libkrunfw-dev installs ABI 5 headers and symlinks but
+          # may omit libkrunfw.pc. Emit metadata from the pinned installed
+          # library path instead of relying on whatever is on the host.
+          if ! pkg-config --exists libkrunfw; then
+            fw="$(ldconfig -p | awk '$1=="libkrunfw.so.5" {print $NF; exit}')"
+            test -n "$fw"
+            printf 'prefix=/usr\nlibdir=%s\nincludedir=/usr/include\nName: libkrunfw\nDescription: Guest kernel library\nVersion: 5.5.0\nLibs: -L${libdir} -lkrunfw\nCflags: -I${includedir}\n' "$(dirname "$fw")" > "$RUNNER_TEMP/libkrunfw.pc"
+            export PKG_CONFIG_PATH="$RUNNER_TEMP:${PKG_CONFIG_PATH:-}"
+            echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          fi
+          test "$(pkg-config --modversion libkrunfw)" = 5.5.0
+      - name: Install native build dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew tap libkrun/krun
+          brew trust libkrun/krun
+          brew install libkrunfw lld llvm xz
+          test -f "$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
+          test -f "$(brew --prefix llvm)/lib/libclang.dylib"
+      - name: Build pinned libkrun with NET=1 and stage relocatable bundle
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.19.6 https://github.com/libkrun/libkrun.git "$RUNNER_TEMP/libkrun"
+          test "$(git -C "$RUNNER_TEMP/libkrun" rev-parse HEAD)" = "227b2de6ed323fe180e02f871c5f325a90c13cc2"
+          stage="$GITHUB_WORKSPACE/internal/nativebundle/assets"
+          if [ "$GOOS" = linux ]; then
+            make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
+            sudo make -C "$RUNNER_TEMP/libkrun" NET=1 install
+            echo /usr/local/lib64 | sudo tee /etc/ld.so.conf.d/krunlet-ci-libkrun.conf >/dev/null
+            sudo ldconfig
+            lib="$(ldconfig -p | awk '$1=="libkrun.so.1" {print $NF; exit}')"
+            fw="$(ldconfig -p | awk '$1=="libkrunfw.so.5" {print $NF; exit}')"
+            test -n "$lib" && test -n "$fw"
+            cp -L "$lib" "$stage/libkrun.so.1"
+            cp -L "$fw" "$stage/libkrunfw.so.5"
+            patchelf --set-rpath '$ORIGIN' "$stage/libkrun.so.1"
+            readelf -d "$stage/libkrun.so.1" | grep -F '$ORIGIN'
+            nm -D "$stage/libkrun.so.1" | grep -F 'krun_add_net_unixstream'
+            ldd "$stage/libkrun.so.1" | tee "$RUNNER_TEMP/native-ldd.txt"
+            ! grep -q 'not found' "$RUNNER_TEMP/native-ldd.txt"
+          else
+            llvm_lib="$(brew --prefix llvm)/lib"
+            # bindgen's build-script executable dynamically loads libclang;
+            # Xcode's clang executable alone does not make the dylib visible
+            # to dyld on GitHub-hosted ARM64 runners.
+            export LIBCLANG_PATH="$llvm_lib"
+            # Do not put the full Homebrew LLVM lib directory in dyld's
+            # global search path. It contains libLLVM.*.dylib, which can
+            # override rustc's bundled LLVM and crash rustc at startup.
+            clang_shim="$RUNNER_TEMP/krunlet-clang-dyld"
+            mkdir -p "$clang_shim"
+            ln -s "$llvm_lib/libclang.dylib" "$clang_shim/libclang.dylib"
+            export DYLD_LIBRARY_PATH="$clang_shim:${DYLD_LIBRARY_PATH:-}"
+            export PKG_CONFIG_PATH="$(brew --prefix libkrunfw)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            test -f "$LIBCLANG_PATH/libclang.dylib"
+            rustc -vV # fail immediately if dyld is loading an incompatible LLVM
+            make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
+            lib="$RUNNER_TEMP/libkrun/target/release/libkrun.1.19.6.dylib"
+            fw="$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
+            test -n "$lib" && test -f "$lib" && test -f "$fw"
+            cp -L "$lib" "$stage/libkrun.dylib"
+            cp -L "$fw" "$stage/libkrunfw.dylib"
+            # A signed single-file CLI must load firmware relative to its
+            # extracted libkrun, not a machine-specific Homebrew prefix.
+            install_name_tool -id @loader_path/libkrun.dylib "$stage/libkrun.dylib"
+            install_name_tool -id @loader_path/libkrunfw.dylib "$stage/libkrunfw.dylib"
+            while read -r dep; do
+              [ -n "$dep" ] || continue
+              install_name_tool -change "$dep" @loader_path/libkrunfw.dylib "$stage/libkrun.dylib"
+            done < <(otool -L "$stage/libkrun.dylib" | awk 'NR>1 {print $1}' | grep libkrunfw || true)
+            otool -L "$stage/libkrun.dylib"
+            codesign --force --sign - "$stage/libkrunfw.dylib"
+            codesign --force --sign - "$stage/libkrun.dylib"
+            codesign --verify --strict "$stage/libkrunfw.dylib"
+            codesign --verify --strict "$stage/libkrun.dylib"
+          fi
+          test -s "$stage/libkrun."* 
+          test -s "$stage/libkrunfw."*
+      - name: Build single-file CLI with embedded native runtime
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
@@ -68,9 +173,18 @@ jobs:
           target="dist/krunlet-$GOOS-$GOARCH"
           go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" -o "$target" ./cmd/krunlet
           test -s "$target"
-          if [ "$GOOS/$GOARCH" = linux/amd64 ]; then
-            test "$("./$target" version)" = "krunlet $version"
+          test "$("./$target" version)" = "krunlet $version"
+          if [ "$GOOS" = darwin ]; then
+            codesign --force --sign - --entitlements docs/krunlet.entitlements "$target"
+            codesign --verify --strict "$target"
           fi
+          go test ./internal/nativebundle
+          # Release artifact MUST resolve its embedded library without
+          # requiring a system libkrun installation.
+          "$target" doctor > dist/doctor.json
+          grep -q 'krunlet/native/' dist/doctor.json
+          grep -q '"VirtioNET":true' dist/doctor.json
+          grep -q '"FirmwareLoadable":true' dist/doctor.json
       - uses: actions/upload-artifact@v4
         with:
           name: krunlet-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -151,11 +265,13 @@ jobs:
             echo
             echo "## Prebuilt CLI"
             echo '- Linux amd64 / arm64, macOS Apple Silicon arm64.'
-            echo '- Go binaries are built with CGO_ENABLED=0; the libkrun native runtime is NOT bundled.'
+            echo '- Native libkrun 1.19.6 (NET=1) and libkrunfw are embedded in each CGO-free CLI; no system libkrun installation is needed.'
             echo '- Runtime ABI: libkrun **1.19.6**, upstream v1.19.6 commit 227b2de6ed323fe180e02f871c5f325a90c13cc2.'
-            echo '- Provide compatible libkrunfw, or supply a trusted custom kernel.'
-            echo '- For gVisor Netstack and yuhaiin ingress, libkrun must be compiled with NET=1.'
-            echo '- Check native dependencies: krunlet doctor --rootfs /trusted/rootfs.'
+            echo '- The CLI extracts checked native libraries into a private content-hashed user cache on first use. A trusted Linux guest rootfs is still required.'
+            echo '- Included libkrun is compiled with NET=1 for gVisor Netstack and yuhaiin inbound.'
+            echo '- Check virtualization/host dependencies: krunlet doctor --rootfs /trusted/rootfs.'
+            echo '- Linux system libc and other external native transitive dependencies remain platform-dependent; macOS assets are ad-hoc signed (not notarized).'
+            echo '- libkrun: Apache-2.0 (https://github.com/libkrun/libkrun/tree/v1.19.6); firmware: GPL-2.0/LGPL-2.1 (https://github.com/libkrun/libkrunfw). Redistributors must satisfy the corresponding-source obligations.'
             echo '- Verify asset integrity using checksums.txt (SHA-256).'
             echo '- Security isolation is experimental and depends on host-level virtualization, process and service cgroups.'
           } > release-notes.md

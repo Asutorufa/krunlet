@@ -5,3 +5,7 @@
 *.out
 /krunlet
 /dist/
+
+# Native blobs are staged by release CI, never stored in git.
+/internal/nativebundle/assets/*.so*
+/internal/nativebundle/assets/*.dylib
