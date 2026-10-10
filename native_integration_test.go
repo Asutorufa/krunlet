@@ -57,6 +57,7 @@ func TestNative32RunsBounded(t *testing.T) {
 		t.Skip("set KRUNLET_STRESS_32=1 to enable full VM stress")
 	}
 	root := integrationRootFS(t)
+	cgroupParent := integrationCgroup(t)
 	scratch := t.TempDir()
 	t.Setenv("TMPDIR", scratch)
 	r, err := New(Options{RootFS: root, CPUs: 1, MemoryMiB: 256, CgroupParent: integrationCgroup(t), MaxConcurrentVMs: 4})
@@ -98,6 +99,15 @@ func TestNative32RunsBounded(t *testing.T) {
 	// Confirm ps sees no surviving child from this particular test run.
 	if output, err := exec.Command("ps", "-eo", "args").Output(); err == nil && bytes.Contains(output, []byte(scratch)) {
 		t.Fatalf("VM stress left a helper process referencing %s", scratch)
+	}
+	groups, err := os.ReadDir(cgroupParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range groups {
+		if strings.HasPrefix(group.Name(), "krunlet-vm-") {
+			t.Errorf("VM stress left per-VM cgroup: %s", group.Name())
+		}
 	}
 }
 
