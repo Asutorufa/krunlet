@@ -13,15 +13,18 @@ import (
 )
 
 type helperSupervisor struct {
-	cmd   *exec.Cmd
-	once  sync.Once
-	ended chan struct{}
+	cmd         *exec.Cmd
+	mu          sync.Mutex
+	terminating bool
+	finished    bool
+	ended       chan struct{}
+	graceDone   chan struct{}
 }
 
 func configureHelper(cmd *exec.Cmd) *helperSupervisor {
 	cmd.SysProcAttr = helperSysProcAttr()
 	cmd.Env = append(os.Environ(), "KRUNLET_SUPERVISOR_PARENT="+strconv.Itoa(os.Getpid()))
-	p := &helperSupervisor{cmd: cmd, ended: make(chan struct{})}
+	p := &helperSupervisor{cmd: cmd, ended: make(chan struct{}), graceDone: make(chan struct{})}
 	cmd.Cancel = func() error { p.terminate(); return nil }
 	cmd.WaitDelay = 3 * time.Second
 	return p
@@ -48,26 +51,48 @@ func (p *helperSupervisor) terminate() {
 	if p == nil {
 		return
 	}
-	p.once.Do(func() {
-		signalHelperGroup(p.cmd, false)
-		go func() {
-			select {
-			case <-time.After(2 * time.Second):
-				signalHelperGroup(p.cmd, true)
-			case <-p.ended:
-			}
-		}()
-	})
+	p.mu.Lock()
+	if p.finished || p.terminating {
+		p.mu.Unlock()
+		return
+	}
+	p.terminating = true
+	p.mu.Unlock()
+
+	signalHelperGroup(p.cmd, false)
+	go func() {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		<-timer.C
+		// The grace period is per process group, not just its leader.
+		// Killing immediately after Wait would cut it short.
+		signalHelperGroup(p.cmd, true)
+		close(p.graceDone)
+	}()
 }
 
 func (p *helperSupervisor) finish() {
 	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	if p.finished {
+		p.mu.Unlock()
+		return
+	}
+	p.finished = true
+	terminating := p.terminating
+	p.mu.Unlock()
+
+	if terminating {
+		// Always let the TERM grace timer complete before releasing the
+		// pinned parent OS thread.
+		<-p.graceDone
+	} else {
+		// Natural helper exit (including panic): force-kill descendants.
+		signalHelperGroup(p.cmd, true)
+	}
 	close(p.ended)
-	// The helper may have spawned descendants and exited before they did.
-	// While its PID/PGID are still owned by this invocation, kill the group.
-	signalHelperGroup(p.cmd, true)
 }
 
 func signalHelperGroup(cmd *exec.Cmd, force bool) {
