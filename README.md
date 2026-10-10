@@ -73,6 +73,18 @@ such hosts require team-compatible signing or must reject the runtime
 with an explicit error. Krunlet does not silently disable Library
 Validation, and this release is not Developer ID notarized.
 
+**Reference binary sizes (2026-10-10 CI, exact bytes; macOS embedded is signed):**
+
+| Target | Slim (`nokrunlet_embed`) | Embedded release | Increase |
+| --- | ---: | ---: | ---: |
+| Linux AMD64 | 8,143,108 | 35,107,076 | +26,963,968 |
+| Linux ARM64 | 8,061,188 | 36,176,132 | +28,114,944 |
+| macOS ARM64 | 8,334,258 | 37,628,928 | +29,294,670 |
+
+The release pipeline regenerates measured byte counts in each
+`size-OS-ARCH.txt`, **after** signing the macOS executable. Build sizes
+vary with toolchain and native dependencies and are not fixed API values.
+
 ## Embedded native CLI releases
 
 Official Release binaries include **libkrun 1.19.6** built with `NET=1`
