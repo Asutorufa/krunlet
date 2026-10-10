@@ -1,7 +1,36 @@
-# Required KVM release gate
+# KVM integration on GitHub-hosted runners
 
-The `vm-integration` job is part of **every pull request and every
-main-branch push**. It is deliberately not conditional on
+The required `vm-integration` job now runs on GitHub's
+`ubuntu-26.04` runner for every PR and main push. It does **not** require
+a self-hosted runner to start.
+
+This is an **experimental** real-KVM integration environment: GitHub does
+not guarantee nested virtualization availability or compatibility on
+hosted runner images. The job checks `/dev/kvm` and cgroup v2, then
+installs pinned libkrun 1.19.6 built with `NET=1`, a compatible guest
+firmware package and a disposable static BusyBox rootfs. Finally it runs
+a real VM doctor and the mandatory 32-VM, orphan-SIGKILL, setsid and
+cgroup-kill integration tests. Unsupported capabilities **fail the job**;
+they never cause a silent skip.
+
+The workflow uses root privileges **only inside the ephemeral GitHub
+runner** to set up a writable cgroup v2 subtree and run the native
+integration tests. This is not a general production deployment
+recommendation.
+
+[GitHub explicitly notes nested virtualization is not guaranteed](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+If GitHub changes the hosted environment, the real-VM check may fail
+until the runner image or host requirements are addressed.
+
+## Fallback: dedicated self-hosted KVM machine
+
+The following instructions describe the alternate environment if GitHub
+hosted KVM proves unreliable. To use it, switch only the integration
+job's `runs-on` label and replace the ephemeral setup with a validated
+host setup. Do not make real VM tests optional.
+
+On a dedicated self-hosted host, `vm-integration` is still required
+on **every pull request and every main-branch push**. It is deliberately not conditional on
 `workflow_dispatch`, `/dev/kvm` discovery, or `KRUNLET_STRESS_32` opt-in.
 
 ## Host prerequisites
@@ -60,7 +89,9 @@ as a required status check. Also require the ordinary Ubuntu, macOS,
 lint and vulnerability checks. The workflow itself cannot configure
 GitHub branch protection.
 
-If the self-hosted runner is missing, the job **stays queued**.
+With the current GitHub-hosted job, missing KVM/cgroup features make the
+job **fail explicitly**. With the fallback self-hosted job, an absent runner
+would leave it queued.
 Do not disable or skip the job just to merge a PR.
 
 ## Release
