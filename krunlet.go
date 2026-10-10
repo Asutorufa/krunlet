@@ -92,14 +92,14 @@ type Request struct {
 }
 
 type Result struct {
-	ExitCode      int               `json:"exit_code"`
-	RunID         string            `json:"run_id,omitempty"`
-	Stdout        string            `json:"stdout"`
-	Stderr        string            `json:"stderr"`
-	Duration      time.Duration     `json:"duration"`
-	TimedOut      bool              `json:"timed_out"`
-	OutputLimited bool              `json:"output_limited"`
-	Files         map[string][]byte `json:"files,omitempty"`
+	ExitCode          int               `json:"exit_code"`
+	RunID             string            `json:"run_id,omitempty"`
+	Stdout            string            `json:"stdout"`
+	Stderr            string            `json:"stderr"`
+	Duration          time.Duration     `json:"duration"`
+	TimedOut          bool              `json:"timed_out"`
+	OutputLimited     bool              `json:"output_limited"`
+	Files             map[string][]byte `json:"files,omitempty"`
 	Native            nativebundle.Info `json:"native"`
 	Containment       string            `json:"containment"`
 	TerminationReason string            `json:"termination_reason,omitempty"`

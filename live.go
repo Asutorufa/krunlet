@@ -52,7 +52,7 @@ type VM struct {
 	previousOOMKills      uint64
 	previousPidsMaxEvents uint64
 	readyMillis           int64
-	nativeInfo nativebundle.Info
+	nativeInfo            nativebundle.Info
 	waitDone              chan struct{}
 	waitErr               error
 }
