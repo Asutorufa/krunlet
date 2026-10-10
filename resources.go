@@ -99,7 +99,9 @@ func cleanupStaleRoots(base string, olderThan time.Duration) error {
 		name := entry.Name()
 		if !strings.HasPrefix(name, "krunlet-root-") &&
 			!strings.HasPrefix(name, "krunlet-session-") &&
-			!strings.HasPrefix(name, "krunlet-template-") {
+			!strings.HasPrefix(name, "krunlet-template-") &&
+			!strings.HasPrefix(name, "krunlet-net-") &&
+			!strings.HasPrefix(name, "krunlet-state-") {
 			continue
 		}
 		dir := filepath.Join(base, entry.Name())

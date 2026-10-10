@@ -277,6 +277,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		return result, fmt.Errorf("workdir: %w", err)
 	}
 	root := r.cfg.RootFS
+	var stateDir string
 	if !r.cfg.Persistent {
 		if err := checkRootFSSize(callCtx, root, r.cfg.MaxRootFSBytes); err != nil {
 			return result, fmt.Errorf("rootfs preflight: %w", err)
@@ -292,6 +293,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 			return result, err
 		}
 		defer func() { _ = marker.Close(); _ = os.RemoveAll(container) }()
+		stateDir = container
 		root = filepath.Join(container, "rootfs")
 		if err := os.Mkdir(root, 0700); err != nil {
 			return result, err
@@ -299,6 +301,19 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		if err = copyRootFS(callCtx, r.cfg.RootFS, root); err != nil {
 			return result, fmt.Errorf("stage rootfs: %w", err)
 		}
+	}
+	if stateDir == "" {
+		// Persistent mode still needs a signed scratch directory so helper
+		// config/status files can be collected after the parent is SIGKILLed.
+		dir, err := os.MkdirTemp("", "krunlet-state-*")
+		if err != nil { return result, err }
+		marker, err := markTempRoot(dir)
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return result, err
+		}
+		defer func() { _ = marker.Close(); _ = os.RemoveAll(dir) }()
+		stateDir = dir
 	}
 	for dest, content := range req.Files {
 		p, err := checkedHostPath(root, dest)
@@ -338,7 +353,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	defer lease.Close()
 	// Only the helper writes to this private status file. It distinguishes
 	// VMM startup failures from a guest process legitimately exiting 125.
-	status, err := os.CreateTemp("", "krunlet-status-*.txt")
+	status, err := os.CreateTemp(stateDir, "status-*.txt")
 	if err != nil {
 		return result, err
 	}
@@ -351,7 +366,7 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 		Ports: r.cfg.PortMaps, RLimits: r.cfg.RLimits, Library: r.cfg.LibraryPath,
 		Kernel: ffiKernel(r.cfg.Kernel), RestrictedNetwork: r.cfg.NetworkPolicy != nil, NetSocket: lease.socket,
 		RunID: runID}
-	configFile, err := os.CreateTemp("", "krunlet-config-*.json")
+	configFile, err := os.CreateTemp(stateDir, "config-*.json")
 	if err != nil {
 		return result, err
 	}

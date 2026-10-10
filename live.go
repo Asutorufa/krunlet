@@ -96,7 +96,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 		return nil, errors.New("invalid VM control directory")
 	}
 	control := filepath.ToSlash(rel)
-	status, err := os.CreateTemp("", "krunlet-live-status-*.txt")
+	status, err := os.CreateTemp(filepath.Dir(sess.root), "status-*.txt")
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func NewVM(ctx context.Context, opts Options) (_ *VM, err error) {
 			_ = os.Remove(statusPath)
 		}
 	}()
-	config, err := os.CreateTemp("", "krunlet-live-config-*.json")
+	config, err := os.CreateTemp(filepath.Dir(sess.root), "config-*.json")
 	if err != nil {
 		return nil, err
 	}

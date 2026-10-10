@@ -58,6 +58,8 @@ func (l *networkLease) Close() {
 	}
 }
 
+var networkStaleCleanup sync.Once
+
 func prepareNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*YuhaiinConfig) (*networkLease, error) {
 	if policy == nil {
 		return &networkLease{}, nil
@@ -74,21 +76,30 @@ func prepareNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*Yuh
 		return nil, err
 	}
 	// Short path to respect the Unix socket path length on macOS.
+	networkStaleCleanup.Do(func() { _ = cleanupStaleRoots("/tmp", 24*time.Hour) })
 	dir, err := os.MkdirTemp("/tmp", "krunlet-net-")
 	if err != nil {
 		gw.Close()
+		return nil, err
+	}
+	marker, err := markTempRoot(dir)
+	if err != nil {
+		gw.Close()
+		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	socket := filepath.Join(dir, "net.sock")
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		gw.Close()
+		_ = marker.Close()
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	if err := os.Chmod(socket, 0600); err != nil {
 		_ = ln.Close()
 		gw.Close()
+		_ = marker.Close()
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
@@ -121,6 +132,7 @@ func prepareNetwork(ctx context.Context, policy *NetworkPolicy, upstream ...*Yuh
 			mu.Unlock()
 			<-done
 			gw.Close()
+			_ = marker.Close()
 			_ = os.RemoveAll(dir)
 		})
 	}
