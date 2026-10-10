@@ -13,12 +13,14 @@ import (
 )
 
 type helperSupervisor struct {
-	cmd         *exec.Cmd
-	mu          sync.Mutex
-	terminating bool
-	finished    bool
-	ended       chan struct{}
-	graceDone   chan struct{}
+	cmd            *exec.Cmd
+	mu             sync.Mutex
+	terminating    bool
+	finished       bool
+	ended          chan struct{}
+	graceDone      chan struct{}
+	cgroup         *vmCgroup
+	cgroupAttached bool
 }
 
 func configureHelper(cmd *exec.Cmd) *helperSupervisor {
@@ -57,16 +59,21 @@ func (p *helperSupervisor) terminate() {
 		return
 	}
 	p.terminating = true
+	hasCgroup := p.cgroup != nil
 	p.mu.Unlock()
 
-	signalHelperGroup(p.cmd, false)
+	if hasCgroup {
+		// No delayed process-group signal when cgroup.kill owns reclamation.
+		killRun(p, true)
+		close(p.graceDone)
+		return
+	}
+	killRun(p, false)
 	go func() {
 		timer := time.NewTimer(2 * time.Second)
 		defer timer.Stop()
 		<-timer.C
-		// The grace period is per process group, not just its leader.
-		// Killing immediately after Wait would cut it short.
-		signalHelperGroup(p.cmd, true)
+		killRun(p, true)
 		close(p.graceDone)
 	}()
 }
@@ -90,7 +97,7 @@ func (p *helperSupervisor) finish() {
 		<-p.graceDone
 	} else {
 		// Natural helper exit (including panic): force-kill descendants.
-		signalHelperGroup(p.cmd, true)
+		killRun(p, true)
 	}
 	close(p.ended)
 }
@@ -107,4 +114,26 @@ func signalHelperGroup(cmd *exec.Cmd, force bool) {
 	if force {
 		_ = cmd.Process.Kill()
 	}
+}
+
+// killRun selects exactly one authoritative reclamation strategy. A contained
+// run uses cgroup.kill exclusively; SIGKILL on the historical process group
+// after cgroup.kill is dangerous because a PGID can be reused by an unrelated
+// process. Before cgroup assignment only the exact gated helper PID is killed.
+func killRun(p *helperSupervisor, force bool) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	cg, attached := p.cgroup, p.cgroupAttached
+	p.mu.Unlock()
+	if cg != nil {
+		if attached {
+			_ = cg.kill()
+		} else if p.cmd != nil && p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		return
+	}
+	signalHelperGroup(p.cmd, force)
 }

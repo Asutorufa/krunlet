@@ -100,7 +100,10 @@ type Result struct {
 	TimedOut      bool              `json:"timed_out"`
 	OutputLimited bool              `json:"output_limited"`
 	Files         map[string][]byte `json:"files,omitempty"`
-	Native        nativebundle.Info `json:"native"`
+	Native            nativebundle.Info `json:"native"`
+	Containment       string            `json:"containment"`
+	TerminationReason string            `json:"termination_reason,omitempty"`
+	MemoryPeakBytes   *uint64           `json:"memory_peak_bytes,omitempty"`
 }
 
 type Runner struct {
@@ -266,13 +269,15 @@ func (r *Runner) RunIO(ctx context.Context, req Request, stdin io.Reader, stdout
 func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (result Result, retErr error) {
 	start := time.Now()
 	runID := newRunID()
-	result = Result{ExitCode: -1, RunID: runID, Files: map[string][]byte{}}
+	result = Result{ExitCode: -1, RunID: runID, Containment: "none", Files: map[string][]byte{}}
 	var helperState *os.ProcessState
 	defer func() {
 		if cb := r.cfg.OnStats; cb != nil {
 			cb(Stats{RunID: runID, ReadyMillis: -1, DurationMillis: time.Since(start).Milliseconds(),
-				ExitCode: result.ExitCode, HostHelperPeakRSSMiB: helperPeakMemory(helperState),
-				NetworkPolicy: r.cfg.NetworkPolicy != nil, TimedOut: result.TimedOut})
+				ExitCode: result.ExitCode, HelperRSSBytes: helperRSSBytes(helperState),
+				MemoryPeakBytes: result.MemoryPeakBytes, Containment: result.Containment,
+				TerminationReason: result.TerminationReason,
+				NetworkPolicy:     r.cfg.NetworkPolicy != nil, TimedOut: result.TimedOut})
 		}
 	}()
 	slog.Debug("krunlet run admitted", "run_id", runID)
@@ -453,11 +458,35 @@ func (r *Runner) run(ctx context.Context, req Request, stdin io.Reader, stdout, 
 	if err != nil {
 		return result, fmt.Errorf("start helper: %w", err)
 	}
-	combined.setKill(func() { signalHelperGroup(cmd, true) })
+	if cg != nil {
+		result.Containment = "cgroup_v2"
+	} else {
+		result.Containment = defaultContainment()
+	}
+	combined.setKill(func() { killRun(supervisor, true) })
 	waitErr := cmd.Wait()
-	// Reap descendant processes even if the helper exited successfully.
+	// Reap descendants using only the authoritative containment strategy.
 	supervisor.finish()
 	helperState = cmd.ProcessState
+	var resourceErr error
+	if cg != nil {
+		usage, readErr := cg.usage()
+		if readErr != nil {
+			resourceErr = fmt.Errorf("read cgroup resource events: %w", readErr)
+		} else {
+			result.MemoryPeakBytes = usage.MemoryPeakBytes
+			if usage.OOMKilled {
+				result.TerminationReason = "oom"
+				resourceErr = ErrOOM
+			} else if usage.PidsLimited {
+				result.TerminationReason = "pids_limit"
+				resourceErr = ErrPidsLimit
+			}
+		}
+	}
+	if resourceErr != nil {
+		return result, resourceErr
+	}
 	result.Duration = time.Since(start)
 	result.Stdout = out.String()
 	result.Stderr = errout.String()

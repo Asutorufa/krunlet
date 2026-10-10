@@ -97,7 +97,11 @@ func TestNative32RunsBounded(t *testing.T) {
 	}
 	// The helper's argv includes --config under the scratch directory.
 	// Confirm ps sees no surviving child from this particular test run.
-	if output, err := exec.Command("ps", "-eo", "args").Output(); err == nil && bytes.Contains(output, []byte(scratch)) {
+	output, err := exec.Command("ps", "-eo", "args").Output()
+	if err != nil {
+		t.Fatalf("cannot list host processes for zero-residue check: %v", err)
+	}
+	if bytes.Contains(output, []byte(scratch)) {
 		t.Fatalf("VM stress left a helper process referencing %s", scratch)
 	}
 	groups, err := os.ReadDir(cgroupParent)

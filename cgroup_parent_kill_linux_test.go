@@ -77,8 +77,17 @@ func TestRealVMParentSIGKILLDrainsCgroup(t *testing.T) {
 	for time.Now().Before(until) {
 		events, err := os.ReadFile(filepath.Join(group, "cgroup.events"))
 		if err == nil && strings.Contains("\n"+string(events), "\npopulated 0\n") {
+			if err := cleanupStaleVMGroups(parent, 0); err != nil {
+				t.Fatalf("restart orphan cleanup failed: %v", err)
+			}
+			if _, err := os.Stat(group); !os.IsNotExist(err) {
+				t.Fatalf("parent death left a cgroup directory after recovery: %v", err)
+			}
+			if err := os.Mkdir(group, 0700); err != nil {
+				t.Fatalf("cgroup path not reusable: %v", err)
+			}
 			if err := os.Remove(group); err != nil {
-				t.Fatalf("dead VM cgroup not removable: %v", err)
+				t.Fatal(err)
 			}
 			return
 		}
