@@ -15,7 +15,7 @@ type helperSupervisor struct {
 func configureHelper(cmd *exec.Cmd) *helperSupervisor {
 	return &helperSupervisor{cmd: cmd}
 }
-func (p *helperSupervisor) start() error {return p.cmd.Start()}
+func (p *helperSupervisor) start() error { return p.cmd.Start() }
 func (p *helperSupervisor) terminate() {
 	if p != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()

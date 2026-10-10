@@ -31,13 +31,15 @@ func configureHelper(cmd *exec.Cmd) *helperSupervisor {
 // Pdeathsig belongs to the creating *thread*; without this Go's scheduler
 // could retire that thread and spuriously terminate a live VM.
 func (p *helperSupervisor) start() error {
-	started:=make(chan error,1)
-	go func(){
+	started := make(chan error, 1)
+	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		err:=p.cmd.Start()
-		started<-err
-		if err==nil { <-p.ended }
+		err := p.cmd.Start()
+		started <- err
+		if err == nil {
+			<-p.ended
+		}
 	}()
 	return <-started
 }

@@ -185,7 +185,7 @@ func New(opts Options) (*Runner, error) {
 	}
 	if opts.Yuhaiin != nil {
 		if !opts.Network {
-			return nil, errors.New("Yuhaiin requires Network=true")
+			return nil, errors.New("yuhaiin requires Network=true")
 		}
 		if opts.Yuhaiin, err = normalizeYuhaiin(opts.Yuhaiin); err != nil {
 			return nil, fmt.Errorf("yuhaiin inbound: %w", err)
