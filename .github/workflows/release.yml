@@ -56,7 +56,16 @@ jobs:
           sudo apt-get install -y git make pkg-config clang lld patchelf \
             build-essential libc6-dev libelf-dev libssl-dev libclang-dev llvm-dev
           # Use the same pinned firmware family as real vm-integration.
-          sudo apt-get install -y libkrunfw5=5.5.0+ds-1 libkrunfw-dev=5.5.0+ds-1
+          # Older runner package indexes may not offer firmware ABI 5 yet.
+          if apt-cache madison libkrunfw5 | awk '{print $3}' | grep -Fxq '5.5.0+ds-1'; then
+            sudo apt-get install -y libkrunfw5=5.5.0+ds-1 libkrunfw-dev=5.5.0+ds-1
+          else
+            arch="$(dpkg --print-architecture)"
+            url='https://mirrors.edge.kernel.org/ubuntu/pool/universe/libk/libkrunfw'
+            curl -fL --retry 3 "$url/libkrunfw5_5.5.0+ds-1_${arch}.deb" -o "$RUNNER_TEMP/libkrunfw5.deb"
+            curl -fL --retry 3 "$url/libkrunfw-dev_5.5.0+ds-1_${arch}.deb" -o "$RUNNER_TEMP/libkrunfw-dev.deb"
+            sudo apt-get install -y "$RUNNER_TEMP/libkrunfw5.deb" "$RUNNER_TEMP/libkrunfw-dev.deb"
+          fi
           sudo ldconfig
           test "$(pkg-config --modversion libkrunfw)" = 5.5.0
       - name: Install native build dependencies (macOS)
