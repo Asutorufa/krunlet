@@ -17,7 +17,7 @@ import (
 // starting a guest. PkgConfigVersion may not be the version of Library.
 type DoctorReport struct {
 	Native         krunffi.NativeInspection `json:"native"`
-	Bundle         nativebundle.Info         `json:"native_bundle"`
+	Bundle         nativebundle.Info        `json:"native_bundle"`
 	Platform       string                   `json:"platform"`
 	KVMAccessible  bool                     `json:"kvm_accessible,omitempty"`
 	KVMError       string                   `json:"kvm_error,omitempty"`

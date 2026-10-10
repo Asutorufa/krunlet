@@ -244,7 +244,7 @@ func run() int {
 			Timeout: *timeout, MaxOutputBytes: *output, MaxFileBytes: *maxFile, Network: *net,
 			PortMaps: ports, RLimits: limits, Persistent: *persistent, LibraryPath: *lib,
 			AllowHostLibraryFallback: *allowHost,
-			Kernel: customKernel, NetworkPolicy: networkPolicy,
+			Kernel:                   customKernel, NetworkPolicy: networkPolicy,
 			MaxConcurrentVMs: *maxConcurrent, FailFast: *failFast, MaxRootFSBytes: *maxRootFS,
 			CgroupParent: *cgroupParent, CgroupMemoryMaxBytes: *cgroupMemory, CgroupPidsMax: *cgroupPids,
 			Yuhaiin: func() *krunlet.YuhaiinConfig {

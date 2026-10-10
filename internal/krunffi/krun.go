@@ -13,8 +13,8 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
 	"github.com/Asutorufa/krunlet/internal/nativebundle"
+	"github.com/ebitengine/purego"
 )
 
 type KernelConfig struct {
@@ -268,12 +268,12 @@ func Available(lib string) error {
 
 // NativeInspection reports ABI feature presence without starting a VM.
 type NativeInspection struct {
-	LibraryABI int
-	FirmwareABI int
-	FirmwarePath string
-	FirmwareVersion string
-	SymbolsPresent int
-	SymbolsRequired int
+	LibraryABI       int
+	FirmwareABI      int
+	FirmwarePath     string
+	FirmwareVersion  string
+	SymbolsPresent   int
+	SymbolsRequired  int
 	Library          string
 	PkgConfigVersion string
 	Symbols          map[string]bool
