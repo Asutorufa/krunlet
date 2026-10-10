@@ -103,8 +103,19 @@ jobs:
           test -e "$KRUNLET_TEST_CGROUP_PARENT/cgroup.controllers"
           grep -qw memory "$KRUNLET_TEST_CGROUP_PARENT/cgroup.controllers"
           grep -qw pids "$KRUNLET_TEST_CGROUP_PARENT/cgroup.controllers"
-      - name: Real VM doctor
-        run: go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS"
+      - name: Real VM doctor (pinned ABI and NET=1)
+        run: |
+          go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS" > doctor.json
+          python3 - <<'PY'
+          import json
+          with open("doctor.json", encoding="utf-8") as f:
+              doctor = json.load(f)
+          native = doctor["native"] if "native" in doctor else doctor["Native"]
+          assert native["PkgConfigVersion"] == "1.19.6", native
+          assert native["VirtioNET"], "libkrun was not built with NET=1 support"
+          assert doctor.get("SmokeAttempted", doctor.get("smoke_attempted")), "real VM smoke not attempted"
+          assert doctor.get("SmokeExitCode", doctor.get("smoke_exit_code")) == 0
+          PY
       - name: Real VM integration tests (including 32-run stress)
         env:
           KRUNLET_STRESS_32: '1'
