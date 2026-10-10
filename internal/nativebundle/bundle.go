@@ -4,6 +4,7 @@ package nativebundle
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,6 +37,9 @@ type Info struct {
 	Integrity      bool   `json:"integrity"`
 	FirmwareABI    int    `json:"firmware_abi,omitempty"`
 	Fallback       bool   `json:"fallback,omitempty"`
+	LibkrunVersion  string `json:"libkrun_version,omitempty"`
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	GlibcBaseline   string `json:"glibc_baseline,omitempty"`
 }
 
 func checkABI(expected, actual int) error {
@@ -92,6 +96,26 @@ func ResolveWithFallback(explicit string, allowHost bool) (Info, error) {
 		}
 		return Info{}, fmt.Errorf("embedded native runtime is incomplete (%s: %v, %s: %v); refusing host fallback", libName, libErr, fwName, fwErr)
 	}
+	var manifest struct {
+		LibkrunVersion string `json:"libkrun_version"`
+		FirmwareVersion string `json:"firmware_version"`
+		GlibcBaseline string `json:"glibc_baseline"`
+		LibrarySHA256 string `json:"libkrun_sha256"`
+		FirmwareSHA256 string `json:"libkrunfw_sha256"`
+	}
+	b, err := assetRead("assets/manifest.json")
+	if err != nil {
+		return Info{}, fmt.Errorf("embedded native libraries lack provenance manifest: %w", err)
+	}
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return Info{}, fmt.Errorf("invalid embedded native manifest: %w", err)
+	}
+	if manifest.LibkrunVersion != "1.19.6" || manifest.LibrarySHA256 != sha(lib) || manifest.FirmwareSHA256 != sha(fw) {
+		return Info{}, fmt.Errorf("embedded native manifest does not match libraries or pinned libkrun 1.19.6")
+	}
+	if err := checkGlibcBaseline(manifest.GlibcBaseline); err != nil {
+		return Info{}, err
+	}
 	cacheRoot, err := os.UserCacheDir()
 	if err != nil {
 		return Info{}, fmt.Errorf("native cache location: %w", err)
@@ -101,6 +125,9 @@ func ResolveWithFallback(explicit string, allowHost bool) (Info, error) {
 		slog.Warn("unsafe native cache overridden by explicit host fallback", "error", err)
 		return Info{Source: "host", Fallback: true}, nil
 	}
+	info.LibkrunVersion = manifest.LibkrunVersion
+	info.FirmwareVersion = manifest.FirmwareVersion
+	info.GlibcBaseline = manifest.GlibcBaseline
 	return info, err
 }
 

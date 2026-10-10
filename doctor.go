@@ -69,7 +69,7 @@ func DoctorDetailed(ctx context.Context, lib, rootfs string) (DoctorReport, erro
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	t, err := New(Options{RootFS: rootfs, LibraryPath: info.Library, Timeout: 10 * time.Second})
+	t, err := New(Options{RootFS: rootfs, LibraryPath: lib, Timeout: 10 * time.Second})
 	if err != nil {
 		return result, err
 	}
