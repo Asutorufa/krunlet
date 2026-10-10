@@ -119,9 +119,16 @@ jobs:
             # Xcode's clang executable alone does not make the dylib visible
             # to dyld on GitHub-hosted ARM64 runners.
             export LIBCLANG_PATH="$llvm_lib"
-            export DYLD_LIBRARY_PATH="$llvm_lib:${DYLD_LIBRARY_PATH:-}"
+            # Do not put the full Homebrew LLVM lib directory in dyld's
+            # global search path. It contains libLLVM.*.dylib, which can
+            # override rustc's bundled LLVM and crash rustc at startup.
+            clang_shim="$RUNNER_TEMP/krunlet-clang-dyld"
+            mkdir -p "$clang_shim"
+            ln -s "$llvm_lib/libclang.dylib" "$clang_shim/libclang.dylib"
+            export DYLD_LIBRARY_PATH="$clang_shim:${DYLD_LIBRARY_PATH:-}"
             export PKG_CONFIG_PATH="$(brew --prefix libkrunfw)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
             test -f "$LIBCLANG_PATH/libclang.dylib"
+            rustc -vV # fail immediately if dyld is loading an incompatible LLVM
             make -C "$RUNNER_TEMP/libkrun" NET=1 -j2
             lib="$RUNNER_TEMP/libkrun/target/release/libkrun.1.19.6.dylib"
             fw="$(brew --prefix libkrunfw)/lib/libkrunfw.dylib"
