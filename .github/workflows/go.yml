@@ -107,6 +107,10 @@ jobs:
             exit 1
           fi
           sudo test -r /dev/kvm && sudo test -w /dev/kvm
+          # This VM is ephemeral; delegate KVM to the unprivileged test user.
+          sudo chgrp "$(id -gn)" /dev/kvm
+          sudo chmod g+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
           test -f /sys/fs/cgroup/cgroup.controllers
           grep -qw memory /sys/fs/cgroup/cgroup.controllers
           grep -qw pids /sys/fs/cgroup/cgroup.controllers
@@ -161,12 +165,16 @@ jobs:
           # does not expose writable cgroup v2 the integration must FAIL.
           echo '+memory +pids' | sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null
           echo '+memory +pids' | sudo tee "$cg/cgroup.subtree_control" >/dev/null
+          sudo chown -R "$(id -u):$(id -g)" "$cg"
+          test -w "$cg/cgroup.procs"
           echo "KRUNLET_TEST_CGROUP_PARENT=$cg" >> "$GITHUB_ENV"
 
       - name: Real VM doctor (pinned ABI and NET=1)
         run: |
           set -euo pipefail
-          sudo --preserve-env=KRUNLET_TEST_ROOTFS,KRUNLET_TEST_CGROUP_PARENT,PATH             env "PATH=$PATH" go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS" > doctor.json
+          # The unprivileged process retains PKG_CONFIG_PATH and owns its
+          # delegated cgroup. Sudo would discard pkg-config environment.
+          go run ./cmd/krunlet doctor --rootfs "$KRUNLET_TEST_ROOTFS" > doctor.json
           python3 - <<'PY'
           import json
           with open("doctor.json", encoding="utf-8") as f:
@@ -183,4 +191,4 @@ jobs:
           KRUNLET_STRESS_32: '1'
         run: |
           set -euo pipefail
-          sudo --preserve-env=KRUNLET_STRESS_32,KRUNLET_TEST_ROOTFS,KRUNLET_TEST_CGROUP_PARENT,PATH             env "PATH=$PATH" CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
+          CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
