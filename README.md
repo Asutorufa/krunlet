@@ -490,6 +490,51 @@ runner remains a fallback if GitHub's hosted image proves unsuitable.
 GitHub branch rules must explicitly require this job; see
 [the KVM runner guide](.github/KVM_RUNNER.md).
 
+### Prebuilt CLI releases
+
+Krunlet publishes **prebuilt, CGO-free Go CLI binaries** for Linux
+(amd64/arm64) and macOS Apple Silicon (arm64), as well as a SHA-256
+manifest and an optional CLI-only installer.
+
+- [Rolling `main` prerelease](https://github.com/Asutorufa/krunlet/releases/tag/main):
+  updated whenever `main` passes the **real VM integration CI**. This
+  tracks development and may contain incompatible changes.
+- [Versioned releases](https://github.com/Asutorufa/krunlet/releases):
+  created on `v*` tags only when that exact commit passed real KVM CI.
+
+Install the latest successful rolling build:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Asutorufa/krunlet/main/install.sh | sudo bash
+krunlet version
+```
+
+To choose a version and avoid needing root for a user-local install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Asutorufa/krunlet/main/install.sh | \
+  KRUNLET_VERSION=main KRUNLET_INSTALL_DIR="$HOME/.local/bin" bash
+```
+
+Or download an asset and `checksums.txt` from the same GitHub Release,
+then validate the specific binary with `sha256sum -c` (Linux) or
+`shasum -a 256 -c` (macOS). The three asset names are
+`krunlet-linux-amd64`, `krunlet-linux-arm64` and
+`krunlet-darwin-arm64`.
+
+**Important:** these binaries embed only the Go CLI. **They do not bundle
+libkrun, libkrunfw or a guest rootfs.** Running a VM still requires the
+compatible native libkrun **1.19.6** installation, libkrunfw (unless a
+custom kernel is used), and `NET=1` when using gVisor/virtio-net or
+yuhaiin inbound. Run `krunlet doctor --rootfs /trusted/rootfs` on
+the target host to verify the native runtime.
+
+The release pipeline builds each architecture for review on pull requests;
+the rolling `main` Release is only updated after the full Go pipeline
+including a real KVM integration test succeeds. A missing or failed KVM
+check **blocks publishing**, not just the stable tag. Source of the
+release strategy: [Portalis](https://github.com/yuhaiin/Portalis).
+
 ### CI and releases
 
 CI checks non-cgo unit tests, vet, Linux race detector,
