@@ -99,10 +99,11 @@ func Serve(ctx context.Context, input io.Reader, output io.Writer, executor Exec
 		}
 	}
 	err := scanner.Err()
+	wasCancelled := ctx.Err() != nil
 	stop()
 	s.cancelAll()
 	s.wg.Wait()
-	if err != nil {
+	if err != nil && !wasCancelled {
 		return fmt.Errorf("read MCP message: %w", err)
 	}
 	return nil
