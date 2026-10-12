@@ -314,7 +314,9 @@ The `run`/`exec` CLI executes one command in one new VM. VM startup costs occur 
 ## MCP server (stdio)
 
 Agents can launch `krunlet mcp --rootfs /absolute/path/to/rootfs` directly as a
-local MCP server. It exposes the `krunlet_run` tool using disposable microVMs,
+local MCP server. On Linux, `--cgroup-parent /delegated/cgroup/v2/path` is
+required by default (`--allow-unsafe` is a deliberate opt-out for trusted
+experiments only). It exposes the `krunlet_run` tool using disposable microVMs,
 with stdout reserved for JSON-RPC and networking disabled by default.
 See [MCP setup and security guidance](docs/MCP.md) for client configuration,
 fixed host-side limits, cancellation, and optional restricted egress.
