@@ -20,7 +20,7 @@ import (
 
 const (
 	protocolVersion = "2025-11-25"
-	maxMessageBytes = 8 << 20
+	defaultMaxMessageBytes = 16 << 20
 )
 
 type Executor interface {
@@ -75,7 +75,14 @@ type server struct {
 // unframed data to output. Closing stdin or cancelling ctx cancels all active
 // tool calls and waits for the Runner to clean up its helpers.
 func Serve(ctx context.Context, input io.Reader, output io.Writer, executor Executor, maxTimeout time.Duration, maxFileSize int64, version string) error {
-	if executor == nil || maxTimeout <= 0 || maxFileSize <= 0 {
+	return ServeWithMessageLimit(ctx, input, output, executor, maxTimeout, maxFileSize, defaultMaxMessageBytes, version)
+}
+
+// ServeWithMessageLimit supports larger base64 inputs without allowing
+// unbounded memory use. Oversized lines are fully discarded through the
+// next newline, then reported as JSON-RPC errors without closing the session.
+func ServeWithMessageLimit(ctx context.Context, input io.Reader, output io.Writer, executor Executor, maxTimeout time.Duration, maxFileSize int64, messageLimit int, version string) error {
+	if executor == nil || maxTimeout <= 0 || maxFileSize <= 0 || messageLimit < 1024 || messageLimit > 128<<20 {
 		return errors.New("invalid MCP server configuration")
 	}
 	ctx, stop := context.WithCancel(ctx)
@@ -85,28 +92,69 @@ func Serve(ctx context.Context, input io.Reader, output io.Writer, executor Exec
 		version: version, encoder: json.NewEncoder(output),
 		active: make(map[string]context.CancelFunc),
 	}
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 64*1024), maxMessageBytes)
-	for scanner.Scan() {
+	reader := bufio.NewReaderSize(input, 64<<10)
+	var transportErr error
+	for {
+		line, oversized, err := readFrame(reader, messageLimit)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			transportErr = fmt.Errorf("read MCP message: %w", err)
+			break
+		}
 		if ctx.Err() != nil {
 			break
 		}
-		if err := s.handle(ctx, scanner.Bytes()); err != nil {
-			stop()
-			s.cancelAll()
-			s.wg.Wait()
-			return err
+		if oversized {
+			transportErr = s.sendError(nil, -32600, "MCP request exceeds the configured frame size limit")
+		} else {
+			transportErr = s.handle(ctx, line)
+		}
+		if transportErr != nil {
+			break
 		}
 	}
-	err := scanner.Err()
 	wasCancelled := ctx.Err() != nil
 	stop()
 	s.cancelAll()
 	s.wg.Wait()
-	if err != nil && !wasCancelled {
-		return fmt.Errorf("read MCP message: %w", err)
+	if transportErr != nil && !wasCancelled {
+		return transportErr
 	}
 	return nil
+}
+
+// readFrame bounds allocations even if a peer sends an unlimited line.
+// When a line is too long, keep consuming chunks until a newline so the
+// next read starts on an intact JSON-RPC frame. EOF after a partial final
+// frame is handled once, then the caller sees EOF on the next read.
+func readFrame(reader *bufio.Reader, limit int) ([]byte, bool, error) {
+	frame := make([]byte, 0, min(limit, 64<<10))
+	tooLarge := false
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if !tooLarge {
+			if len(chunk) > limit-len(frame) {
+				tooLarge = true
+			} else {
+				frame = append(frame, chunk...)
+			}
+		}
+		switch {
+		case err == nil:
+			return frame, tooLarge, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			if len(frame) == 0 && !tooLarge {
+				return nil, false, io.EOF
+			}
+			return frame, tooLarge, nil
+		default:
+			return nil, false, err
+		}
+	}
 }
 
 func (s *server) handle(ctx context.Context, line []byte) error {
