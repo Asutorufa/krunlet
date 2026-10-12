@@ -2,8 +2,8 @@ package main
 
 import (
 	"io"
-	"runtime"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
