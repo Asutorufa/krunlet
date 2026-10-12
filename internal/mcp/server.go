@@ -265,12 +265,15 @@ func (s *server) call(ctx context.Context, raw json.RawMessage) any {
 	}
 	files := make(map[string][]byte, len(args.Files))
 	for name, encoded := range args.Files {
-		if int64(base64.StdEncoding.DecodedLen(len(encoded))) > s.maxFileSize {
+		if int64(base64.StdEncoding.DecodedLen(len(encoded))) > s.maxFileSize+2 {
 			return toolError(fmt.Sprintf("input %q exceeds the file limit", name))
 		}
 		content, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			return toolError(fmt.Sprintf("input %q is not valid base64", name))
+		}
+		if int64(len(content)) > s.maxFileSize {
+			return toolError(fmt.Sprintf("input %q exceeds the file limit", name))
 		}
 		files[name] = content
 	}
