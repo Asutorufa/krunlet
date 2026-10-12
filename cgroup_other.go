@@ -18,3 +18,14 @@ func startHelperInCgroup(s *helperSupervisor, _ *vmCgroup) error { return s.star
 func waitCgroupStartupGate() error                               { return nil }
 func killOwnCgroup()                                             {}
 func (cg *vmCgroup) Close() error                                { return nil }
+
+type cgroupUsage struct {
+	MemoryPeakBytes *uint64
+	OOMKilled       bool
+	PidsLimited     bool
+	OOMKills        uint64
+	PidsMaxEvents   uint64
+}
+
+func (cg *vmCgroup) kill() error                 { return nil }
+func (cg *vmCgroup) usage() (cgroupUsage, error) { return cgroupUsage{}, nil }

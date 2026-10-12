@@ -539,7 +539,9 @@ runner, err := krunlet.New(krunlet.Options{
     OnStats: func(stats krunlet.Stats) {
         slog.Info("vm completion", "run_id", stats.RunID,
             "exit_code", stats.ExitCode, "ready_ms", stats.ReadyMillis,
-            "helper_peak_rss_mib", stats.HostHelperPeakRSSMiB)
+            "helper_rss_bytes", stats.HelperRSSBytes,
+            "cgroup_peak_bytes", stats.MemoryPeakBytes,
+            "containment", stats.Containment)
     },
 })
 ```
@@ -560,8 +562,12 @@ guaranteed unmount. Cross-VM writes remain independent, and hardlinks
 are deliberately never used for cloning. Close a template after all
 runners/sessions using it have stopped.
 
-The helper starts in its own process group. On cancellation Krunlet
-sends SIGTERM, then SIGKILL after a 2-second grace period. Linux uses
+Without an explicit cgroup, the helper starts in its own process group.
+On cancellation Krunlet sends SIGTERM, then SIGKILL after a 2-second grace
+period. With delegated Linux cgroup v2, cgroup.kill exclusively owns the
+reclamation path. It is unsafe to additionally signal a previously used
+PGID because Linux can reassign that group ID to an unrelated process.
+Linux uses
 `PR_SET_PDEATHSIG` plus parent pidfd monitoring; the built-in macOS
 helper monitors `kqueue EVFILT_PROC NOTE_EXIT`. Process-group killing
 does not catch deliberately detached session/process groups: a
@@ -573,8 +579,12 @@ shutdown.
 
 `Stats` callbacks use `RunID` for correlation and do not introduce a
 Prometheus dependency. One-shot `ReadyMillis=-1` means guest readiness
-cannot be measured separately from the helper's final exit. Peak memory
-is the host **helper RSS**, not guest-allocated physical RAM.
+cannot be measured separately from the helper's final exit.
+`Stats.HelperRSSBytes` records the host helper's peak RSS in bytes.
+`Stats.MemoryPeakBytes` is nullable and available only for Linux cgroup
+v2 runs: it reflects host memory.peak including VMM guest RAM and charged
+page cache, **not** guest-internal RAM utilization. A nil value is
+unknown, and is omitted from JSON (never recorded as a measured zero).
 
 ### Native diagnostics
 
@@ -584,10 +594,14 @@ krunlet doctor
 
 # Real VM boot with a trusted rootfs containing /bin/true:
 krunlet doctor --rootfs /trusted/rootfs
+
+# Require/probe delegated cgroup v2 containment (failure never downgrades):
+krunlet doctor --cgroup-parent /sys/fs/cgroup/krunlet --rootfs /trusted/rootfs
 ```
 
 Doctor outputs JSON including native ABI symbols, pkg-config's detected
-libkrun version (which may not match a manually specified library), host
+libkrun version (which may not match a manually specified library),
+explicit `containment` and native `native_bundle` integrity/provenance (a verified embedded libkrun 1.19.6 SHA-256 / manifest or an explicitly selected host runtime), host
 /dev/kvm accessibility on Linux, separately loadable libkrunfw status,
 and real smoke boot duration/exit code when `--rootfs` is given.
 For a real VM, use libkrun **1.19.6**; NET=1 is needed for gVisor networking.
@@ -819,16 +833,25 @@ runner, err := krunlet.New(krunlet.Options{
 })
 ```
 
-Krunlet creates one cgroup per VM. The built-in helper is blocked by a
+Krunlet creates one cgroup per VM. Owner locks are stored in a private
+host directory outside cgroupfs. At startup, orphaned owned cgroups with
+no live lock are killed (if populated) and removed immediately, even after
+an uncatchable parent SIGKILL; active groups are never collected.
+The built-in helper is blocked by a
 startup pipe until assigned to its cgroup; failed setup does not fall back
 to an unrestricted launch. Custom helpers are rejected in cgroup mode.
 The cgroup restricts **host helper processes**, not directly the guest
-kernel's own task count. On macOS use the platform process monitor; cgroup
-v2 is Linux-only. See SECURITY.md for supervision limits.
+kernel's own task count. `pids.max` does **not** enforce a guest fork bomb
+limit; guest task exhaustion needs guest-side controls. A cgroup-triggered
+`memory.events:oom_kill` is reported as `ErrOOM`/`termination_reason=oom`;
+`pids.events:max` as `ErrPidsLimit`/`termination_reason=pids_limit`.
+On macOS use the platform process monitor; cgroup v2 is Linux-only.
+See SECURITY.md for supervision limits.
 
 `Stats.ReadyMillis` is startup-to-VM-ready (persistent VM only);
 `Stats.DurationMillis` is total run elapsed time, including admission and
-staging. `Stats.HostHelperPeakRSSMiB` is the host helper RSS, **not guest
+staging. `Stats.HelperRSSBytes` is host helper RSS; nullable
+`Stats.MemoryPeakBytes` is the host cgroup peak, **not guest-internal
 memory usage**.
 
 **The helper cgroup does not enclose the gVisor gateway or the yuhaiin
@@ -840,3 +863,5 @@ The v0.1.0 release requires a successful `vm-integration` check on the
 release commit with libkrun **1.19.6** exactly, including the 32-real-VM
 stress scenario, process inspection, and cgroup enforcement. The release
 workflow does not substitute fake runs for this check.
+
+

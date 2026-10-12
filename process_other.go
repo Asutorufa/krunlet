@@ -27,3 +27,9 @@ func signalHelperGroup(cmd *exec.Cmd, _ bool) {
 		_ = cmd.Process.Kill()
 	}
 }
+
+func killRun(p *helperSupervisor, _ bool) {
+	if p != nil && p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+}

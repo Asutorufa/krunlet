@@ -216,6 +216,24 @@ jobs:
           assert doctor.get("SmokeExitCode", doctor.get("smoke_exit_code")) == 0
           PY
 
+      - name: Real host cgroup OOM and pids.max enforcement
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            CGO_ENABLED=0 go test -tags vm_integration \
+              -run '^TestReviewRealHost(CgroupOOMIsDistinguishable|PidsMaxIsDistinguishable)$' \
+              -timeout 3m -v ./... 2>&1 | tee vm-resource-host.log
+      - name: Real VM cgroup OOM maps to typed Result error
+        run: |
+          set -euo pipefail
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            CGO_ENABLED=0 go test -tags vm_integration \
+              -run '^TestReviewVMHostOOMMappedToTypedError$' \
+              -timeout 3m -v ./... 2>&1 | tee vm-resource-oom.log
       - name: Real VM integration (32 launches, setsid, parent SIGKILL)
         env:
           KRUNLET_STRESS_32: '1'
@@ -225,4 +243,24 @@ jobs:
             "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
             "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
             "KRUNLET_STRESS_32=$KRUNLET_STRESS_32" \
-            CGO_ENABLED=0 go test -tags vm_integration -timeout 20m ./...
+            CGO_ENABLED=0 go test -tags vm_integration \
+              -skip '^TestReview(RealHostCgroupOOMIsDistinguishable|RealHostPidsMaxIsDistinguishable|VMHostOOMMappedToTypedError)$' \
+              -timeout 20m -v ./... 2>&1 | tee vm-integration.log
+      - name: Retain real KVM test failures for diagnosis
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-integration-failure-log
+          path: |
+            vm-resource-host.log
+            vm-resource-oom.log
+            vm-integration.log
+          if-no-files-found: error
+      - name: Assert ps has zero surviving VM helpers (required)
+        run: |
+          set -euo pipefail
+          bash scripts/check-no-helper-processes.sh
+      - name: Prove ps leak detector fails on a deliberately leaked fake
+        run: |
+          set -euo pipefail
+          bash scripts/check-no-helper-processes-negative.sh
