@@ -252,3 +252,19 @@ func TestOversizedInputIsRejected(t *testing.T) {
 		t.Fatal("oversized MCP frame accepted")
 	}
 }
+
+func TestInputFileAtExactLimit(t *testing.T) {
+	tr := newTransport(t, fakeExecutor(func(_ context.Context, req krunlet.Request) (krunlet.Result, error) {
+		if got := len(req.Files["/tmp/at-limit"]); got != 4096 {
+			t.Errorf("decoded guest file size %d, want 4096", got)
+		}
+		return krunlet.Result{ExitCode: 0}, nil
+	}))
+	initialize(t, tr)
+	data := base64.StdEncoding.EncodeToString(make([]byte, 4096))
+	tr.send(t, `{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"krunlet_run","arguments":{"command":["true"],"files":{"/tmp/at-limit":"`+data+`"}}}}`)
+	result := tr.read(t)["result"].(map[string]any)
+	if result["isError"] != false {
+		t.Fatalf("exact-size file was rejected: %v", result)
+	}
+}
