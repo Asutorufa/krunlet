@@ -324,17 +324,17 @@ func toolError(message string) any {
 
 func runTool() any {
 	return map[string]any{
-		"name": "krunlet_run",
+		"name":        "krunlet_run",
 		"description": "Run one command in a new disposable Krunlet microVM; no host paths or VM settings can be changed by the tool caller. Nonzero guest exits are reported in the result.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1, "description": "Guest executable and arguments, e.g. [\"/bin/sh\",\"-lc\",\"echo hi\"]"},
-				"workdir": map[string]any{"type": "string", "description": "Absolute guest working directory (default /)"},
-				"stdin": map[string]any{"type": "string", "description": "Literal stdin for the guest command"},
-				"env": map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}, "description": "Guest environment variables"},
-				"files": map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}, "description": "Absolute guest paths mapped to base64 file contents. Does not read host files."},
-				"collect": map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Absolute guest paths to collect after command exits (returned as base64)."},
+				"command":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1, "description": "Guest executable and arguments, e.g. [\"/bin/sh\",\"-lc\",\"echo hi\"]"},
+				"workdir":    map[string]any{"type": "string", "description": "Absolute guest working directory (default /)"},
+				"stdin":      map[string]any{"type": "string", "description": "Literal stdin for the guest command"},
+				"env":        map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}, "description": "Guest environment variables"},
+				"files":      map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}, "description": "Absolute guest paths mapped to base64 file contents. Does not read host files."},
+				"collect":    map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Absolute guest paths to collect after command exits (returned as base64)."},
 				"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": "Optional shorter timeout; cannot exceed the server's configured maximum."},
 			},
 			"required":             []string{"command"},
