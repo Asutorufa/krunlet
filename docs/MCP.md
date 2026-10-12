@@ -33,6 +33,7 @@ Configure your agent's MCP server list with an absolute executable path:
         "mcp",
         "--rootfs", "/absolute/path/to/trusted/rootfs",
         "--timeout", "30s",
+        "--cgroup-parent", "/sys/fs/cgroup/krunlet",
         "--max-concurrent-vms", "2"
       ]
     }
@@ -45,11 +46,17 @@ For Codex clients using TOML configuration, the equivalent entry is:
 ```toml
 [mcp_servers.krunlet]
 command = "/absolute/path/to/krunlet"
-args = ["mcp", "--rootfs", "/absolute/path/to/trusted/rootfs", "--timeout", "30s"]
+args = ["mcp", "--rootfs", "/absolute/path/to/trusted/rootfs", "--cgroup-parent", "/sys/fs/cgroup/krunlet", "--timeout", "30s"]
 ```
 
-On **Linux hosts running untrusted agent code**, supply a dedicated,
-administrator-delegated cgroup v2 parent:
+On **Linux**, a dedicated, administrator-delegated cgroup v2 parent is
+**mandatory by default**. Without `--cgroup-parent`, the MCP server refuses
+to start before accepting JSON-RPC requests. To intentionally opt out for a
+trusted local experiment, pass `--allow-unsafe`; this prints a warning and
+uses weaker process-group cleanup (setsid/setpgid escape is not contained).
+Do not use this override with untrusted agents.
+
+Use:
 
 ```sh
 krunlet mcp --rootfs /absolute/path/to/rootfs \
@@ -97,8 +104,14 @@ using the trusted startup configuration:
 - MCP clients that support structured results receive `structuredContent`;
   other clients can parse the JSON text content.
 
-The server enforces the Runner's output and file limits, a maximum 8 MiB
-request line, and bounds on the number of environment variables and files.
+The server enforces the Runner's output and file limits, a default maximum
+16 MiB JSON-RPC request line (configurable with `--max-message-bytes` up to
+128 MiB), and bounds on the number of environment variables and files.
+Base64 contents can substantially expand the request size; increase the
+frame cap only when needed and account for its memory impact. An oversized
+request is discarded through its terminating newline and receives a JSON-RPC
+error (with a null ID when the request ID cannot be safely recovered). The
+next request remains readable on the same stdio connection.
 Tool calls execute concurrently up to the Runner's VM limit. MCP
 `notifications/cancelled`, client disconnect/EOF, and process shutdown
 cancel in-flight calls so the Runner can clean up their VM helpers.
@@ -128,3 +141,19 @@ The implementation supports newline-delimited JSON-RPC 2.0 over stdio,
 `ping`, `tools/list`, `tools/call`, and cancellation notifications. It
 does not advertise MCP resources, prompts, HTTP transports, or 2026
 task-augmented execution.
+
+
+## Cancellation and crash recovery
+
+The MCP server keeps reading stdin while guest tools execute. A
+`notifications/cancelled` notification cancels the request context and waits
+for the Runner's microVM/helper cleanup, while an EOF cancels all in-flight
+commands. On Linux, an associated delegated cgroup v2 scope is killed and
+removed. At startup the server also reclaims unlocked rootfs/state/network
+temporary directories and orphan cgroups left by uncatchable SIGKILL; active
+owner locks and unrelated session/template directories are preserved.
+
+The real-KVM CI job exercises cancellation, EOF, and server SIGKILL followed
+by a restart, and checks helper PIDs, cgroup directories, and temporary
+rootfs directories are gone. Cancellation is not a substitute for an
+independent host process supervisor for a malicious or broken VMM.
