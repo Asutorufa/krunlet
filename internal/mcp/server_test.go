@@ -268,3 +268,25 @@ func TestInputFileAtExactLimit(t *testing.T) {
 		t.Fatalf("exact-size file was rejected: %v", result)
 	}
 }
+
+func TestContextCancellationWithClosedInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	input, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, input, io.Discard, fakeExecutor(func(context.Context, krunlet.Request) (krunlet.Result, error) {
+			t.Fatal("runner called")
+			return krunlet.Result{}, nil
+		}), time.Second, 4096, "test")
+	}()
+	cancel()
+	_ = writer.CloseWithError(io.ErrClosedPipe)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancelled MCP shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled MCP server did not exit")
+	}
+}
