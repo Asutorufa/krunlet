@@ -29,12 +29,16 @@ type testTransport struct {
 }
 
 func newTransport(t *testing.T, runner Executor) *testTransport {
+	return newTransportWithLimit(t, runner, defaultMaxMessageBytes)
+}
+
+func newTransportWithLimit(t *testing.T, runner Executor, limit int) *testTransport {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(context.Background(), inR, outW, runner, 3*time.Second, 4096, "test")
+		done <- ServeWithMessageLimit(context.Background(), inR, outW, runner, 3*time.Second, 4096, limit, "test")
 		_ = outW.Close()
 	}()
 	t.Cleanup(func() {
@@ -242,14 +246,32 @@ func TestEOFReapsActiveCalls(t *testing.T) {
 	}
 }
 
-func TestOversizedInputIsRejected(t *testing.T) {
-	err := Serve(context.Background(), strings.NewReader(strings.Repeat(" ", maxMessageBytes+1)+"\n"), io.Discard,
-		fakeExecutor(func(context.Context, krunlet.Request) (krunlet.Result, error) {
-			t.Fatal("runner called")
-			return krunlet.Result{}, nil
-		}), time.Second, 4096, "test")
-	if err == nil {
-		t.Fatal("oversized MCP frame accepted")
+func TestOversizedFrameIsRecoverable(t *testing.T) {
+	var called atomic.Int32
+	tr := newTransportWithLimit(t, fakeExecutor(func(_ context.Context, _ krunlet.Request) (krunlet.Result, error) {
+		called.Add(1)
+		return krunlet.Result{ExitCode: 0}, nil
+	}), 1024)
+	initialize(t, tr)
+	// The oversized request must be drained through its newline, even if
+	// the following JSON-RPC message arrives in the same write.
+	tr.send(t, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"krunlet_run","arguments":{"command":["true"],"files":{"/tmp/data":"`+strings.Repeat("a", 2000)+`"}}}}`+"\n"+`{"jsonrpc":"2.0","id":5,"method":"ping"}`)
+	errorResponse := tr.read(t)
+	if errorResponse["id"] != nil || errorResponse["error"].(map[string]any)["code"] != float64(-32600) {
+		t.Fatalf("oversized request did not yield JSON-RPC error: %v", errorResponse)
+	}
+	if ping := tr.read(t); ping["id"] != float64(5) {
+		t.Fatalf("session lost synchronization after oversized request: %v", ping)
+	}
+	if called.Load() != 0 {
+		t.Fatal("oversized tool request must not execute")
+	}
+	tr.send(t, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"krunlet_run","arguments":{"command":["true"]}}}`)
+	if response := tr.read(t); response["result"].(map[string]any)["isError"] != false {
+		t.Fatalf("tool call after oversized frame: %v", response)
+	}
+	if called.Load() != 1 {
+		t.Fatalf("expected a single valid tool call, got %d", called.Load())
 	}
 }
 
