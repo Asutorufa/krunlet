@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,14 @@ func TestLicensesCLIContainsCompleteTerms(t *testing.T) {
 		if !strings.Contains(string(result), fragment) {
 			t.Fatalf("missing %s", fragment)
 		}
+	}
+}
+
+func TestMCPRequiresExplicitLinuxContainment(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("cgroup v2 is Linux-specific")
+	}
+	if code := runMCP([]string{"--rootfs", t.TempDir()}); code != 2 {
+		t.Fatalf("MCP must refuse missing cgroup parent unless --allow-unsafe was explicitly supplied, got %d", code)
 	}
 }

@@ -65,6 +65,8 @@ func run() int {
 			return 125
 		}
 		return 125 // native Enter success never returns
+	case "mcp":
+		return runMCP(os.Args[2:])
 	case "doctor":
 		f := flag.NewFlagSet("doctor", flag.ContinueOnError)
 		lib := f.String("lib", "", "libkrun shared library path")
@@ -325,7 +327,7 @@ func readLimited(path string, limit int64) ([]byte, error) {
 	return data, e
 }
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage: krunlet run --rootfs DIR [flags] -- /bin/sh -lc 'echo hello' | doctor | version | licenses")
+	fmt.Fprintln(os.Stderr, "Usage: krunlet run --rootfs DIR [flags] -- /bin/sh -lc 'echo hello' | mcp --rootfs DIR [flags] | doctor | version | licenses")
 }
 
 func parseNetworkRule(spec string) (krunlet.NetworkRule, error) {

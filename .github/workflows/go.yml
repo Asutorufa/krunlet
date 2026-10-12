@@ -216,6 +216,17 @@ jobs:
           assert doctor.get("SmokeExitCode", doctor.get("smoke_exit_code")) == 0
           PY
 
+      - name: MCP stdio real VM smoke test
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/krunlet-mcp" ./cmd/krunlet
+          sudo env "PATH=$PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+            "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" \
+            "KRUNLET_TEST_ROOTFS=$KRUNLET_TEST_ROOTFS" \
+            "KRUNLET_TEST_CGROUP_PARENT=$KRUNLET_TEST_CGROUP_PARENT" \
+            "KRUNLET_TEST_MCP_BINARY=$RUNNER_TEMP/krunlet-mcp" \
+            python3 scripts/test-mcp-stdio-vm.py
+
       - name: Real host cgroup OOM and pids.max enforcement
         run: |
           set -euo pipefail

@@ -174,6 +174,12 @@ func markTempRoot(dir string) (*os.File, error) {
 }
 
 func cleanupStaleRoots(base string, olderThan time.Duration) error {
+	return cleanupStaleRootsMatching(base, olderThan, nil)
+}
+
+// cleanupStaleRootsMatching reclaims only marked, unlocked directories. When
+// prefixes is nil all known Krunlet temporary directory classes are eligible.
+func cleanupStaleRootsMatching(base string, olderThan time.Duration, prefixes []string) error {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return err
@@ -184,6 +190,18 @@ func cleanupStaleRoots(base string, olderThan time.Duration) error {
 			continue
 		}
 		name := entry.Name()
+		if prefixes != nil {
+			allowed := false
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(name, prefix) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				continue
+			}
+		}
 		if !strings.HasPrefix(name, "krunlet-root-") &&
 			!strings.HasPrefix(name, "krunlet-session-") &&
 			!strings.HasPrefix(name, "krunlet-template-") &&
