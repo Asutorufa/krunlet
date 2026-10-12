@@ -275,7 +275,7 @@ func TestContextCancellationWithClosedInput(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- Serve(ctx, input, io.Discard, fakeExecutor(func(context.Context, krunlet.Request) (krunlet.Result, error) {
-			t.Fatal("runner called")
+			t.Error("runner called")
 			return krunlet.Result{}, nil
 		}), time.Second, 4096, "test")
 	}()
