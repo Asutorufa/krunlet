@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -149,13 +150,13 @@ func TestProtocolErrorsAndInvalidToolInputs(t *testing.T) {
 	if got := tr.read(t)["error"].(map[string]any)["code"]; got != float64(-32602) {
 		t.Fatalf("unknown tool error: %v", got)
 	}
-	for _, arguments := range []string{
+	for i, arguments := range []string{
 		`{"command":[]}`,
 		`{"command":["echo"],"files":{"/tmp/data":"%%%bad"}}`,
 		`{"command":["echo"],"timeout_ms":4000}`,
 		`{"command":["echo"],"host_path":"/etc/passwd"}`,
 	} {
-		tr.send(t, `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"krunlet_run","arguments":`+arguments+`}}`)
+		tr.send(t, `{"jsonrpc":"2.0","id":`+strconv.Itoa(10+i)+`,"method":"tools/call","params":{"name":"krunlet_run","arguments":`+arguments+`}}`)
 		if got := tr.read(t)["result"].(map[string]any)["isError"]; got != true {
 			t.Fatalf("expected validation error for %s, got %v", arguments, got)
 		}
