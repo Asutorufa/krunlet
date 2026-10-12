@@ -311,7 +311,15 @@ No network is the default. `--network` enables TSI through the **host network**,
 
 The `run`/`exec` CLI executes one command in one new VM. VM startup costs occur per call; the Go library also offers `NewVM` for one running VM serving multiple commands.
 
-## MCP server (stdio)\n\nAgents can launch \`krunlet mcp --rootfs /absolute/path/to/rootfs\` directly as a\nlocal MCP server. It exposes the \`krunlet_run\` tool using disposable microVMs,\nwith stdout reserved for JSON-RPC and networking disabled by default.\nSee [MCP setup and security guidance](docs/MCP.md) for client configuration,\nfixed host-side limits, cancellation, and optional restricted egress.\n\n## Go API
+## MCP server (stdio)
+
+Agents can launch `krunlet mcp --rootfs /absolute/path/to/rootfs` directly as a
+local MCP server. It exposes the `krunlet_run` tool using disposable microVMs,
+with stdout reserved for JSON-RPC and networking disabled by default.
+See [MCP setup and security guidance](docs/MCP.md) for client configuration,
+fixed host-side limits, cancellation, and optional restricted egress.
+
+## Go API
 
 ```go
 s, err := krunlet.New(krunlet.Options{
