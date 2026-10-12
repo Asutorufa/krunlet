@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	protocolVersion = "2025-11-25"
+	protocolVersion        = "2025-11-25"
 	defaultMaxMessageBytes = 16 << 20
 )
 
