@@ -26,10 +26,12 @@ func runMCP(args []string) int {
 	outputLimit := f.Int64("output-limit", 4<<20, "combined guest stdout/stderr limit")
 	fileLimit := f.Int64("file-limit", 4<<20, "maximum size of each input/output guest file")
 	rootfsLimit := f.Int64("max-rootfs-bytes", 1<<30, "maximum logical bytes in staged rootfs")
+	messageLimit := f.Int("max-message-bytes", 16<<20, "maximum MCP stdio request frame bytes (default 16 MiB, max 128 MiB)")
 	concurrent := f.Int("max-concurrent-vms", 0, "per-Runner concurrency limit (0=default)")
 	failFast := f.Bool("fail-fast", false, "reject instead of queueing when VM limit is reached")
 	lib := f.String("lib", "", "trusted host libkrun library path")
 	cgroupParent := f.String("cgroup-parent", "", "delegated cgroup v2 directory for Linux host containment")
+	allowUnsafe := f.Bool("allow-unsafe", false, "explicitly permit Linux MCP without cgroup containment (unsafe for untrusted agents)")
 	cgroupMemory := f.Int64("cgroup-memory-max", 0, "host VMM memory.max (0=guest+256MiB)")
 	cgroupPids := f.Int64("cgroup-pids-max", 0, "host VMM pids.max (0=256)")
 	network := f.Bool("network", false, "enable restricted outbound TCP/UDP; requires --allow-cidr")
@@ -41,13 +43,17 @@ func runMCP(args []string) int {
 		return 2
 	}
 	if *rootfs == "" || f.NArg() != 0 || *cpus == 0 || *cpus > 64 || *memory < 128 || *memory > 65536 ||
-		*timeout <= 0 || *outputLimit <= 0 || *fileLimit <= 0 || *rootfsLimit <= 0 || *concurrent < 0 {
+		*timeout <= 0 || *outputLimit <= 0 || *fileLimit <= 0 || *rootfsLimit <= 0 || *concurrent < 0 || *messageLimit < 1024 || *messageLimit > 128<<20 {
 		fmt.Fprintln(os.Stderr, "invalid MCP flags: --rootfs is required and resource limits must be positive")
 		f.Usage()
 		return 2
 	}
 	if (!*network && (len(allowCIDRs) != 0 || len(blockCIDRs) != 0)) || (*network && len(allowCIDRs) == 0) {
 		fmt.Fprintln(os.Stderr, "MCP networking requires --network and at least one --allow-cidr; unrestricted TSI is not supported")
+		return 2
+	}
+	if runtime.GOOS == "linux" && *cgroupParent == "" && !*allowUnsafe {
+		fmt.Fprintln(os.Stderr, "krunlet mcp: Linux requires --cgroup-parent for untrusted agents; explicitly pass --allow-unsafe to run with process-group-only cleanup")
 		return 2
 	}
 	var policy *krunlet.NetworkPolicy
@@ -82,8 +88,14 @@ func runMCP(args []string) int {
 		fmt.Fprintln(os.Stderr, "krunlet mcp:", err)
 		return 125
 	}
+	// Reclaim after configuration validation and before the MCP handshake.
+	// Locks protect any directories still owned by another live process.
+	if err := krunlet.ReclaimMCPOrphans(*cgroupParent); err != nil {
+		fmt.Fprintln(os.Stderr, "krunlet mcp: cannot reclaim orphaned VM resources:", err)
+		return 125
+	}
 	if runtime.GOOS == "linux" && *cgroupParent == "" {
-		fmt.Fprintln(os.Stderr, "krunlet mcp: WARNING: no --cgroup-parent; process-group cleanup alone cannot contain setsid descendants")
+		fmt.Fprintln(os.Stderr, "krunlet mcp: WARNING: explicit --allow-unsafe: process groups cannot contain setsid descendants")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -93,7 +105,7 @@ func runMCP(args []string) int {
 		<-ctx.Done()
 		_ = os.Stdin.Close()
 	}()
-	if err := mcp.Serve(ctx, os.Stdin, os.Stdout, runner, *timeout, *fileLimit, version); err != nil {
+	if err := mcp.ServeWithMessageLimit(ctx, os.Stdin, os.Stdout, runner, *timeout, *fileLimit, *messageLimit, version); err != nil {
 		fmt.Fprintln(os.Stderr, "krunlet mcp:", err)
 		return 125
 	}
