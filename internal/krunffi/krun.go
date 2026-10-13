@@ -178,9 +178,14 @@ func Enter(c Config) error {
 			return err
 		}
 	}
-	// An explicitly empty port map prevents implicit wildcard forwarding.
-	if err := withCStringArray(c.Ports, func(p unsafe.Pointer) error { return check("krun_set_port_map", a.ports(ctx, p)) }); err != nil {
-		return err
+	// libkrun's port-map API applies only to TSI networking and rejects it
+	// when a custom virtio-net device is configured. Restricted networking
+	// uses that device and does not support inbound port maps.
+	if !c.RestrictedNetwork {
+		// An explicitly empty port map prevents implicit wildcard forwarding.
+		if err := withCStringArray(c.Ports, func(p unsafe.Pointer) error { return check("krun_set_port_map", a.ports(ctx, p)) }); err != nil {
+			return err
+		}
 	}
 	if len(c.Command) == 0 {
 		return fmt.Errorf("empty guest command")

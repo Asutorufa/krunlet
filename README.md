@@ -2,7 +2,7 @@
 
 **Small microVM sandbox runner for Go LLM agents.** Uses [libkrun 1.19.x](https://github.com/libkrun/libkrun) via [purego](https://github.com/ebitengine/purego), without cgo. Provides a Go API and a CLI, disposable filesystem copies, timeouts, CPU/RAM configuration, bounded output, file exchange, and opt-in networking.
 
-> **Experimental, not production security-hardened.** libkrun's VMM and virtio-fs operate with host-side privileges. Do not give an untrusted guest access to sensitive host files. A production deployment additionally needs OS-level confinement (Linux mount/user/network namespaces and cgroups, or equivalent), especially to contain virtio-fs filesystem traversal, host resources, and disk exhaustion. Our per-run rootfs copy is **not** a replacement for host confinement. No network/virtio-fs security claim has been validated by an end-to-end VM test yet.
+> **Security note.** libkrun's VMM and virtio-fs operate with host-side privileges. Do not give an untrusted guest access to sensitive host files. A production deployment additionally needs OS-level confinement (Linux mount/user/network namespaces and cgroups, or equivalent), especially to contain virtio-fs filesystem traversal, host resources, and disk exhaustion. Our per-run rootfs copy is **not** a replacement for host confinement. Real-KVM integration tests now include IPv4/TCP host-canary checks for disabled networking, allowlist enforcement, and private-address blocking, plus absolute and upward-relative symlink checks against a harmless host-file canary. These are targeted regression checks, not a general security proof: UDP, IPv6, other virtio-fs traversal forms, and adversarial end-to-end confinement have not been comprehensively validated.
 
 ## Requirements
 
